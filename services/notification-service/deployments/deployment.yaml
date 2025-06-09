@@ -1,0 +1,834 @@
+# Notification Service Deployment for Agba Voice AI Platform
+# Comprehensive notification handling with email, SMS, push, and webhook support
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-service-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    environment: production
+    version: "1.0.0"
+    
+    server:
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+    
+    database:
+      driver: postgres
+      dsn: "postgresql://agba_user:${POSTGRES_PASSWORD}@pgbouncer:5432/agba_core?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300s
+    
+    redis:
+      address: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 4
+      pool_size: 10
+    
+    nats:
+      url: "nats://nats-client:4222"
+      username: "agba_user"
+      password: "${NATS_PASSWORD}"
+    
+    email:
+      enabled: true
+      provider: "smtp"
+      smtp:
+        host: "${SMTP_HOST}"
+        port: 587
+        username: "${SMTP_USERNAME}"
+        password: "${SMTP_PASSWORD}"
+        use_tls: true
+      from_email: "noreply@agba.ai"
+      from_name: "Agba.ai"
+      timeout: 30s
+      max_retries: 3
+      retry_delay: 60s
+      rate_limit: 100
+      track_opens: true
+      track_clicks: true
+      unsubscribe: true
+    
+    sms:
+      enabled: true
+      provider: "twilio"
+      twilio:
+        account_sid: "${TWILIO_ACCOUNT_SID}"
+        auth_token: "${TWILIO_AUTH_TOKEN}"
+      from_number: "${SMS_FROM_NUMBER}"
+      timeout: 30s
+      max_retries: 3
+      retry_delay: 60s
+      rate_limit: 50
+      max_length: 160
+      enable_unicode: true
+    
+    push:
+      enabled: true
+      provider: "fcm"
+      fcm:
+        server_key: "${FCM_SERVER_KEY}"
+        project_id: "${FCM_PROJECT_ID}"
+      timeout: 30s
+      max_retries: 3
+      retry_delay: 60s
+      rate_limit: 1000
+      batch_size: 100
+      ttl: 24h
+    
+    webhook:
+      enabled: true
+      timeout: 30s
+      max_retries: 3
+      retry_delay: 60s
+      rate_limit: 200
+      signing_secret: "${WEBHOOK_SIGNING_SECRET}"
+      verify_ssl: true
+      user_agent: "Agba-Notification-Service/1.0"
+    
+    processing:
+      queue_size: 10000
+      worker_count: 10
+      batch_size: 100
+      process_interval: 5s
+      max_retries: 3
+      retry_delay: 60s
+      retry_backoff: "exponential"
+      retry_max_delay: 3600s
+      cleanup_interval: 1h
+      retention_period: 2160h
+      failed_retention: 720h
+      global_rate_limit: 1000
+      per_user_rate_limit: 100
+      enable_priority: true
+      high_priority_queue: "notifications.high"
+      normal_priority_queue: "notifications.normal"
+      low_priority_queue: "notifications.low"
+      enable_deduplication: true
+      deduplication_window: 300s
+    
+    monitoring:
+      enabled: true
+      metrics_path: "/metrics"
+      request_logging: true
+      slow_request_threshold: 1s
+
+---
+# Notification Service Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notification-secrets
+  namespace: agba-system
+type: Opaque
+data:
+  smtp-host: c210cC5nbWFpbC5jb20= # base64 encoded smtp.gmail.com
+  smtp-username: bm90aWZpY2F0aW9uc0BhZ2JhLmFp # base64 encoded notifications@agba.ai
+  smtp-password: eW91ci1zbXRwLXBhc3N3b3Jk # base64 encoded your-smtp-password
+  twilio-account-sid: eW91ci10d2lsaW8tYWNjb3VudC1zaWQ= # base64 encoded your-twilio-account-sid
+  twilio-auth-token: eW91ci10d2lsaW8tYXV0aC10b2tlbg== # base64 encoded your-twilio-auth-token
+  sms-from-number: KzE1NTU1NTU1NTU1 # base64 encoded +15555555555
+  fcm-server-key: eW91ci1mY20tc2VydmVyLWtleQ== # base64 encoded your-fcm-server-key
+  fcm-project-id: eW91ci1mY20tcHJvamVjdC1pZA== # base64 encoded your-fcm-project-id
+  webhook-signing-secret: eW91ci13ZWJob29rLXNpZ25pbmctc2VjcmV0 # base64 encoded your-webhook-signing-secret
+
+---
+# Notification Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: agba-system
+  labels:
+    app: notification-service
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: notification-service
+        image: agba/notification-service:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: AGBA_NOTIFICATION_ENVIRONMENT
+          value: "production"
+        - name: AGBA_NOTIFICATION_SERVER_PORT
+          value: "8080"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth
+              key: agba-password
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: smtp-host
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: smtp-username
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: smtp-password
+        - name: TWILIO_ACCOUNT_SID
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: twilio-account-sid
+        - name: TWILIO_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: twilio-auth-token
+        - name: SMS_FROM_NUMBER
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: sms-from-number
+        - name: FCM_SERVER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: fcm-server-key
+        - name: FCM_PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: fcm-project-id
+        - name: WEBHOOK_SIGNING_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: notification-secrets
+              key: webhook-signing-secret
+        volumeMounts:
+        - name: config
+          mountPath: /etc/notification-service
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        - name: templates
+          mountPath: /app/templates
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: notification-service-config
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+      - name: templates
+        persistentVolumeClaim:
+          claimName: notification-templates
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+# PersistentVolumeClaim for templates
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notification-templates
+  namespace: agba-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: fast-ssd
+
+---
+# Notification Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: agba-system
+  labels:
+    app: notification-service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: notification-service
+
+---
+# Notification Service HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: notification-service-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-service
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: notification_queue_size
+      target:
+        type: AverageValue
+        averageValue: "1000"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# Notification Service PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-service-pdb
+  namespace: agba-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: notification-service
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: notification-service
+  namespace: agba-system
+  labels:
+    app: notification-service
+spec:
+  selector:
+    matchLabels:
+      app: notification-service
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for Notification Service Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: notification-service-alerts
+  namespace: agba-system
+  labels:
+    app: notification-service
+spec:
+  groups:
+  - name: notification-service
+    rules:
+    - alert: NotificationServiceDown
+      expr: up{job="notification-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: Notification Service is down
+        description: "Notification Service instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NotificationServiceHighLatency
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="notification-service"}[5m])) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Notification Service high latency
+        description: "Notification Service 95th percentile latency is above 1s\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NotificationServiceHighErrorRate
+      expr: rate(http_requests_total{job="notification-service",status=~"5.."}[5m]) / rate(http_requests_total{job="notification-service"}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Notification Service high error rate
+        description: "Notification Service error rate is above 5%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NotificationQueueHigh
+      expr: notification_queue_size > 5000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Notification queue size is high
+        description: "Notification queue size is above 5000\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NotificationFailureRateHigh
+      expr: rate(notifications_failed_total[5m]) / rate(notifications_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: High notification failure rate
+        description: "Notification failure rate is above 10%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: EmailProviderDown
+      expr: email_provider_health == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: Email provider is down
+        description: "Email provider health check failed\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: SMSProviderDown
+      expr: sms_provider_health == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: SMS provider is down
+        description: "SMS provider health check failed\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# Notification Database Schema Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: notification-service-schema-setup
+  namespace: agba-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: schema-setup
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h pgbouncer -p 5432 -U agba_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 5
+          done
+          
+          # Create notification tables
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h pgbouncer -U agba_user -d agba_core << 'EOF'
+          
+          -- Notification types enums
+          CREATE TYPE notification_type AS ENUM ('email', 'sms', 'push', 'webhook');
+          CREATE TYPE notification_status AS ENUM ('pending', 'queued', 'sending', 'sent', 'delivered', 'failed', 'retrying', 'cancelled', 'bounced', 'complaint');
+          CREATE TYPE notification_priority AS ENUM ('high', 'normal', 'low');
+          CREATE TYPE template_type AS ENUM ('email', 'sms', 'push', 'webhook');
+          CREATE TYPE subscription_status AS ENUM ('active', 'unsubscribed', 'bounced', 'complaint');
+          
+          -- Notifications table
+          CREATE TABLE IF NOT EXISTS notifications (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            type notification_type NOT NULL,
+            status notification_status NOT NULL DEFAULT 'pending',
+            priority notification_priority NOT NULL DEFAULT 'normal',
+            recipient_id UUID,
+            recipient_type VARCHAR(50),
+            to_address VARCHAR(500) NOT NULL,
+            subject VARCHAR(500),
+            body TEXT NOT NULL,
+            html_body TEXT,
+            template_id UUID,
+            template_data JSONB DEFAULT '{}',
+            headers JSONB DEFAULT '{}',
+            attachments JSONB DEFAULT '[]',
+            tags TEXT[] DEFAULT '{}',
+            scheduled_at TIMESTAMP WITH TIME ZONE,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            provider VARCHAR(100),
+            provider_id VARCHAR(255),
+            attempts INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 3,
+            last_attempt_at TIMESTAMP WITH TIME ZONE,
+            next_retry_at TIMESTAMP WITH TIME ZONE,
+            sent_at TIMESTAMP WITH TIME ZONE,
+            delivered_at TIMESTAMP WITH TIME ZONE,
+            opened_at TIMESTAMP WITH TIME ZONE,
+            clicked_at TIMESTAMP WITH TIME ZONE,
+            error_message TEXT,
+            error_code VARCHAR(100),
+            tracking_id VARCHAR(255),
+            campaign_id UUID,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Templates table
+          CREATE TABLE IF NOT EXISTS notification_templates (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            type template_type NOT NULL,
+            subject VARCHAR(500),
+            body TEXT NOT NULL,
+            html_body TEXT,
+            variables JSONB DEFAULT '[]',
+            defaults JSONB DEFAULT '{}',
+            language VARCHAR(10) DEFAULT 'en',
+            localizations JSONB DEFAULT '{}',
+            description TEXT,
+            tags TEXT[] DEFAULT '{}',
+            version INTEGER DEFAULT 1,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE(name, type)
+          );
+          
+          -- Subscriptions table
+          CREATE TABLE IF NOT EXISTS notification_subscriptions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL,
+            type notification_type NOT NULL,
+            channel VARCHAR(500) NOT NULL,
+            status subscription_status NOT NULL DEFAULT 'active',
+            categories TEXT[] DEFAULT '{}',
+            frequency VARCHAR(50) DEFAULT 'immediate',
+            timezone VARCHAR(100) DEFAULT 'UTC',
+            quiet_hours JSONB DEFAULT '{}',
+            verified BOOLEAN DEFAULT FALSE,
+            verified_at TIMESTAMP WITH TIME ZONE,
+            verification_token VARCHAR(255),
+            unsubscribed_at TIMESTAMP WITH TIME ZONE,
+            unsubscribe_token VARCHAR(255),
+            unsubscribe_reason TEXT,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE(user_id, type, channel)
+          );
+          
+          -- Devices table for push notifications
+          CREATE TABLE IF NOT EXISTS notification_devices (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL,
+            token VARCHAR(500) NOT NULL UNIQUE,
+            platform VARCHAR(50) NOT NULL,
+            app_version VARCHAR(50),
+            os_version VARCHAR(50),
+            device_model VARCHAR(100),
+            is_active BOOLEAN DEFAULT TRUE,
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Campaigns table
+          CREATE TABLE IF NOT EXISTS notification_campaigns (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            type notification_type NOT NULL,
+            template_id UUID NOT NULL,
+            recipients JSONB NOT NULL DEFAULT '[]',
+            filters JSONB DEFAULT '{}',
+            scheduled_at TIMESTAMP WITH TIME ZONE,
+            started_at TIMESTAMP WITH TIME ZONE,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            status VARCHAR(50) DEFAULT 'draft',
+            total_recipients INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            delivered_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            opened_count INTEGER DEFAULT 0,
+            clicked_count INTEGER DEFAULT 0,
+            created_by UUID NOT NULL,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Audit logs table
+          CREATE TABLE IF NOT EXISTS notification_audit_logs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            notification_id UUID NOT NULL,
+            action VARCHAR(100) NOT NULL,
+            status notification_status NOT NULL,
+            provider VARCHAR(100),
+            request_data JSONB,
+            response_data JSONB,
+            error_message TEXT,
+            error_code VARCHAR(100),
+            duration INTERVAL,
+            metadata JSONB DEFAULT '{}',
+            timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Indexes for performance
+          CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+          CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+          CREATE INDEX IF NOT EXISTS idx_notifications_recipient_id ON notifications(recipient_id);
+          CREATE INDEX IF NOT EXISTS idx_notifications_scheduled_at ON notifications(scheduled_at);
+          CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+          CREATE INDEX IF NOT EXISTS idx_notifications_provider ON notifications(provider);
+          CREATE INDEX IF NOT EXISTS idx_notifications_campaign_id ON notifications(campaign_id);
+          
+          CREATE INDEX IF NOT EXISTS idx_templates_name ON notification_templates(name);
+          CREATE INDEX IF NOT EXISTS idx_templates_type ON notification_templates(type);
+          CREATE INDEX IF NOT EXISTS idx_templates_active ON notification_templates(is_active);
+          
+          CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON notification_subscriptions(user_id);
+          CREATE INDEX IF NOT EXISTS idx_subscriptions_type ON notification_subscriptions(type);
+          CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON notification_subscriptions(status);
+          CREATE INDEX IF NOT EXISTS idx_subscriptions_channel ON notification_subscriptions(channel);
+          
+          CREATE INDEX IF NOT EXISTS idx_devices_user_id ON notification_devices(user_id);
+          CREATE INDEX IF NOT EXISTS idx_devices_token ON notification_devices(token);
+          CREATE INDEX IF NOT EXISTS idx_devices_platform ON notification_devices(platform);
+          CREATE INDEX IF NOT EXISTS idx_devices_active ON notification_devices(is_active);
+          
+          CREATE INDEX IF NOT EXISTS idx_campaigns_type ON notification_campaigns(type);
+          CREATE INDEX IF NOT EXISTS idx_campaigns_status ON notification_campaigns(status);
+          CREATE INDEX IF NOT EXISTS idx_campaigns_created_by ON notification_campaigns(created_by);
+          
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_notification_id ON notification_audit_logs(notification_id);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON notification_audit_logs(action);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON notification_audit_logs(timestamp);
+          
+          -- Partitioning for notifications (by month)
+          CREATE TABLE IF NOT EXISTS notifications_y2025m06 PARTITION OF notifications
+          FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+          
+          -- Partitioning for audit logs (by month)
+          CREATE TABLE IF NOT EXISTS notification_audit_logs_y2025m06 PARTITION OF notification_audit_logs
+          FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+          
+          -- Functions for automatic cleanup
+          CREATE OR REPLACE FUNCTION cleanup_old_notifications()
+          RETURNS void AS $$
+          BEGIN
+            DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '90 days' AND status IN ('sent', 'delivered', 'failed');
+            DELETE FROM notification_audit_logs WHERE timestamp < NOW() - INTERVAL '90 days';
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Function for updating timestamps
+          CREATE OR REPLACE FUNCTION update_notification_updated_at()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Triggers for automatic updated_at
+          CREATE TRIGGER update_notifications_updated_at BEFORE UPDATE ON notifications
+            FOR EACH ROW EXECUTE FUNCTION update_notification_updated_at();
+          
+          CREATE TRIGGER update_templates_updated_at BEFORE UPDATE ON notification_templates
+            FOR EACH ROW EXECUTE FUNCTION update_notification_updated_at();
+          
+          CREATE TRIGGER update_subscriptions_updated_at BEFORE UPDATE ON notification_subscriptions
+            FOR EACH ROW EXECUTE FUNCTION update_notification_updated_at();
+          
+          CREATE TRIGGER update_devices_updated_at BEFORE UPDATE ON notification_devices
+            FOR EACH ROW EXECUTE FUNCTION update_notification_updated_at();
+          
+          CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON notification_campaigns
+            FOR EACH ROW EXECUTE FUNCTION update_notification_updated_at();
+          
+          -- Insert default email templates
+          INSERT INTO notification_templates (id, name, type, subject, body, html_body, created_by, updated_by) VALUES
+          ('00000000-0000-0000-0000-000000000001', 'welcome_email', 'email', 'Welcome to Agba.ai!', 'Welcome {{name}}! Thank you for joining Agba.ai.', '<h1>Welcome {{name}}!</h1><p>Thank you for joining Agba.ai.</p>', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'),
+          ('00000000-0000-0000-0000-000000000002', 'email_verification', 'email', 'Verify your email address', 'Please verify your email by clicking: {{verification_url}}', '<p>Please verify your email by clicking: <a href="{{verification_url}}">Verify Email</a></p>', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'),
+          ('00000000-0000-0000-0000-000000000003', 'password_reset', 'email', 'Reset your password', 'Reset your password by clicking: {{reset_url}}', '<p>Reset your password by clicking: <a href="{{reset_url}}">Reset Password</a></p>', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'),
+          ('00000000-0000-0000-0000-000000000004', 'invitation', 'email', 'You have been invited to join {{organization}}', 'You have been invited to join {{organization}}. Click here to accept: {{invitation_url}}', '<p>You have been invited to join <strong>{{organization}}</strong>.</p><p><a href="{{invitation_url}}">Accept Invitation</a></p>', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001')
+          ON CONFLICT (id) DO NOTHING;
+          
+          EOF
+          
+          echo "Notification service schema setup completed"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+      restartPolicy: OnFailure
+
+---
+# Network Policy for Notification Service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notification-service-netpol
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: notification-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from other services for notifications
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow egress to PostgreSQL via PgBouncer
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow egress to NATS
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow HTTPS for external notification providers
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 587
+    - protocol: TCP
+      port: 25
+    - protocol: TCP
+      port: 80
