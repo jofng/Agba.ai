@@ -7,19 +7,22 @@ import (
 	"time"
 
 	"github.com/agba-ai/monitoring-service/internal/models"
+	"github.com/agba-ai/monitoring-service/internal/repository"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
 // MonitoringService handles business logic for monitoring operations
 type MonitoringService struct {
-	logger *zap.Logger
+	repository *repository.Repository
+	logger     *zap.Logger
 }
 
 // NewMonitoringService creates a new monitoring service
-func NewMonitoringService(logger *zap.Logger) *MonitoringService {
+func NewMonitoringService(repository *repository.Repository, logger *zap.Logger) *MonitoringService {
 	return &MonitoringService{
-		logger: logger,
+		repository: repository,
+		logger:     logger,
 	}
 }
 
@@ -30,34 +33,43 @@ func (s *MonitoringService) GetMetrics(ctx context.Context, service, timeRange s
 		zap.String("timeRange", timeRange),
 	)
 
-	// Mock implementation - replace with actual metrics collection
-	metrics := &models.MetricsResponse{
+	// Parse time range
+	since := time.Now().Add(-1 * time.Hour) // Default to 1 hour
+	switch timeRange {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour)
+	case "24h":
+		since = time.Now().Add(-24 * time.Hour)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	}
+
+	// Get metrics from repository
+	repoMetrics, err := s.repository.GetMetrics(ctx, service, "cpu_usage", since)
+	if err != nil {
+		s.logger.Error("Failed to get metrics from repository", zap.Error(err))
+		return nil, err
+	}
+
+	// Convert repository metrics to response format
+	var metrics []models.Metric
+	for _, m := range repoMetrics {
+		metrics = append(metrics, models.Metric{
+			Name:      m.Name,
+			Value:     m.Value,
+			Unit:      m.Unit,
+			Timestamp: m.Timestamp,
+		})
+	}
+
+	response := &models.MetricsResponse{
 		Service:   service,
 		TimeRange: timeRange,
-		Metrics: []models.Metric{
-			{
-				Name:      "cpu_usage",
-				Value:     75.5,
-				Unit:      "percent",
-				Timestamp: time.Now(),
-			},
-			{
-				Name:      "memory_usage",
-				Value:     60.2,
-				Unit:      "percent",
-				Timestamp: time.Now(),
-			},
-			{
-				Name:      "request_count",
-				Value:     1250,
-				Unit:      "count",
-				Timestamp: time.Now(),
-			},
-		},
+		Metrics:   metrics,
 		Timestamp: time.Now(),
 	}
 
-	return metrics, nil
+	return response, nil
 }
 
 // GetServiceHealth retrieves health status for a specific service
