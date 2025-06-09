@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FreeSWITCH Variables Configuration -->
+<include>
+  <!-- Global Variables -->
+  <X-PRE-PROCESS cmd="set" data="default_password=1234"/>
+  <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
+  <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
+  <X-PRE-PROCESS cmd="set" data="use_profile=internal"/>
+  
+  <!-- Network Settings -->
+  <X-PRE-PROCESS cmd="set" data="bind_server_ip=auto"/>
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${local_ip_v4}"/>
+  
+  <!-- SIP Settings -->
+  <X-PRE-PROCESS cmd="set" data="internal_auth_calls=true"/>
+  <X-PRE-PROCESS cmd="set" data="internal_sip_port=5060"/>
+  <X-PRE-PROCESS cmd="set" data="internal_tls_port=5061"/>
+  <X-PRE-PROCESS cmd="set" data="external_sip_port=5080"/>
+  <X-PRE-PROCESS cmd="set" data="external_tls_port=5081"/>
+  
+  <!-- RTP Settings -->
+  <X-PRE-PROCESS cmd="set" data="rtp_start_port=16384"/>
+  <X-PRE-PROCESS cmd="set" data="rtp_end_port=32768"/>
+  
+  <!-- Codec Settings -->
+  <X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA,GSM"/>
+  <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=OPUS,G722,PCMU,PCMA,GSM"/>
+  
+  <!-- Recording Settings -->
+  <X-PRE-PROCESS cmd="set" data="recordings_dir=/usr/local/freeswitch/recordings"/>
+  <X-PRE-PROCESS cmd="set" data="sounds_dir=/usr/local/freeswitch/sounds"/>
+  
+  <!-- Database Settings -->
+  <X-PRE-PROCESS cmd="set" data="core_db_dsn=pgsql://host=postgres port=5432 dbname=agba_freeswitch user=postgres password=password"/>
+  
+  <!-- Event Socket Settings -->
+  <X-PRE-PROCESS cmd="set" data="event_socket_password=ClueCon"/>
+  <X-PRE-PROCESS cmd="set" data="event_socket_port=8021"/>
+  
+  <!-- Conference Settings -->
+  <X-PRE-PROCESS cmd="set" data="conference_auto_outcall_caller_id_name=Conference"/>
+  <X-PRE-PROCESS cmd="set" data="conference_auto_outcall_caller_id_number=8000"/>
+  <X-PRE-PROCESS cmd="set" data="conference_auto_outcall_timeout=60"/>
+  <X-PRE-PROCESS cmd="set" data="conference_auto_outcall_flags=none"/>
+  
+  <!-- Agba AI Platform Specific Settings -->
+  <X-PRE-PROCESS cmd="set" data="agba_api_endpoint=http://api-gateway:8080"/>
+  <X-PRE-PROCESS cmd="set" data="agba_recording_service=http://recording-service:8080"/>
+  <X-PRE-PROCESS cmd="set" data="agba_monitoring_service=http://monitoring-service:8080"/>
+  <X-PRE-PROCESS cmd="set" data="agba_user_service=http://user-management-service:8080"/>
+  
+  <!-- Call Routing Settings -->
+  <X-PRE-PROCESS cmd="set" data="default_gateway=agba_trunk"/>
+  <X-PRE-PROCESS cmd="set" data="emergency_gateway=emergency_trunk"/>
+  
+  <!-- Security Settings -->
+  <X-PRE-PROCESS cmd="set" data="sip_tls_version=tlsv1,tlsv1.1,tlsv1.2"/>
+  <X-PRE-PROCESS cmd="set" data="sip_tls_ciphers=ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH"/>
+  
+  <!-- Performance Settings -->
+  <X-PRE-PROCESS cmd="set" data="max_sessions=1000"/>
+  <X-PRE-PROCESS cmd="set" data="sessions_per_second=30"/>
+  
+  <!-- Logging Settings -->
+  <X-PRE-PROCESS cmd="set" data="console_loglevel=info"/>
+  <X-PRE-PROCESS cmd="set" data="default_areacode=415"/>
+  <X-PRE-PROCESS cmd="set" data="default_country=US"/>
+</include>

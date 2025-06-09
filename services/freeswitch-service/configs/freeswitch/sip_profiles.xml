@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Agba AI Platform SIP Profiles Configuration -->
+<include>
+
+  <!-- Internal SIP Profile -->
+  <profile name="internal">
+    <aliases>
+      <alias name="default"/>
+    </aliases>
+    <gateways>
+      <X-PRE-PROCESS cmd="include" data="internal/*.xml"/>
+    </gateways>
+    <domains>
+      <domain name="all" alias="false" parse="true"/>
+    </domains>
+    <settings>
+      <param name="debug" value="0"/>
+      <param name="shutdown-on-fail" value="true"/>
+      <param name="sip-trace" value="no"/>
+      <param name="sip-capture" value="no"/>
+      <param name="rfc2833-pt" value="101"/>
+      <param name="sip-port" value="$${internal_sip_port}"/>
+      <param name="dialplan" value="XML"/>
+      <param name="context" value="default"/>
+      <param name="dtmf-duration" value="2000"/>
+      <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+      <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+      <param name="rtp-timer-name" value="soft"/>
+      <param name="local-network-acl" value="localnet.auto"/>
+      <param name="manage-presence" value="true"/>
+      <param name="inbound-codec-negotiation" value="generous"/>
+      <param name="nonce-ttl" value="60"/>
+      <param name="auth-calls" value="$${internal_auth_calls}"/>
+      <param name="inbound-late-negotiation" value="true"/>
+      <param name="inbound-zrtp-passthru" value="true"/>
+      <param name="rtp-ip" value="$${local_ip_v4}"/>
+      <param name="sip-ip" value="$${local_ip_v4}"/>
+      <param name="hold-music" value="$${hold_music}"/>
+      <param name="apply-nat-acl" value="nat.auto"/>
+      <param name="apply-inbound-acl" value="domains"/>
+      <param name="apply-register-acl" value="domains"/>
+      <param name="dtmf-type" value="rfc2833"/>
+      <param name="record-path" value="$${recordings_dir}"/>
+      <param name="record-template" value="${caller_id_number}.${target_domain}.${strftime(%Y-%m-%d-%H-%M-%S)}.wav"/>
+      <param name="manage-shared-appearance" value="true"/>
+      <param name="dbname" value="share_presence"/>
+      <param name="presence-hosts" value="$${domain},$${local_ip_v4}"/>
+      <param name="force-register-domain" value="$${domain}"/>
+      <param name="force-subscription-expires" value="60"/>
+      <param name="force-publish-expires" value="60"/>
+      <param name="challenge-realm" value="auto_from"/>
+      <param name="disable-transcoding" value="true"/>
+      <param name="inbound-bypass-media" value="true"/>
+      <param name="inbound-proxy-media" value="true"/>
+      <param name="rtp-timeout-sec" value="300"/>
+      <param name="rtp-hold-timeout-sec" value="1800"/>
+      <param name="enable-timer" value="false"/>
+      <param name="minimum-session-expires" value="120"/>
+      <param name="apply-candidate-acl" value="localnet.auto"/>
+      <param name="apply-candidate-acl" value="wan_v4.auto"/>
+      <param name="rtp-rewrite-timestamps" value="true"/>
+      <param name="pass-rfc2833" value="true"/>
+      <param name="odbc-dsn" value="$${core_db_dsn}"/>
+      <param name="inbound-use-callid-as-uuid" value="true"/>
+      <param name="outbound-use-uuid-as-callid" value="true"/>
+      <param name="rtp-autoflush-during-bridge" value="false"/>
+      <param name="rtp-rewrite-timestamps" value="true"/>
+      <param name="auto-rtp-bugs" value="clear"/>
+      <param name="disable-rtp-auto-adjust" value="true"/>
+      
+      <!-- Agba AI Specific Settings -->
+      <param name="agba-ai-enabled" value="true"/>
+      <param name="agba-recording-auto-start" value="false"/>
+      <param name="agba-ai-endpoint" value="$${agba_api_endpoint}"/>
+      <param name="agba-user-agent" value="Agba-AI-FreeSWITCH/1.0"/>
+      
+      <!-- Security Settings -->
+      <param name="auth-all-packets" value="false"/>
+      <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+      <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+      <param name="rtp-ip" value="$${local_ip_v4}"/>
+      <param name="sip-ip" value="$${local_ip_v4}"/>
+      <param name="tls" value="$${internal_ssl_enable}"/>
+      <param name="tls-only" value="false"/>
+      <param name="tls-bind-params" value="transport=tls"/>
+      <param name="tls-sip-port" value="$${internal_tls_port}"/>
+      <param name="tls-cert-dir" value="$${internal_ssl_dir}"/>
+      <param name="tls-version" value="$${sip_tls_version}"/>
+      <param name="tls-ciphers" value="$${sip_tls_ciphers}"/>
+      
+      <!-- Performance Settings -->
+      <param name="max-proceeding" value="1000"/>
+      <param name="session-timeout" value="1800"/>
+      <param name="multiple-registrations" value="contact"/>
+      <param name="inbound-reg-force-matching-username" value="true"/>
+      <param name="delete-subs-on-register" value="false"/>
+    </settings>
+  </profile>
+
+  <!-- External SIP Profile -->
+  <profile name="external">
+    <gateways>
+      <X-PRE-PROCESS cmd="include" data="external/*.xml"/>
+    </gateways>
+    <aliases>
+      <alias name="outbound"/>
+    </aliases>
+    <domains>
+      <domain name="all" alias="false" parse="false"/>
+    </domains>
+    <settings>
+      <param name="debug" value="0"/>
+      <param name="shutdown-on-fail" value="true"/>
+      <param name="sip-trace" value="no"/>
+      <param name="sip-capture" value="no"/>
+      <param name="rfc2833-pt" value="101"/>
+      <param name="sip-port" value="$${external_sip_port}"/>
+      <param name="dialplan" value="XML"/>
+      <param name="context" value="public"/>
+      <param name="dtmf-duration" value="2000"/>
+      <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+      <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+      <param name="hold-music" value="$${hold_music}"/>
+      <param name="rtp-timer-name" value="soft"/>
+      <param name="manage-presence" value="false"/>
+      <param name="inbound-codec-negotiation" value="generous"/>
+      <param name="nonce-ttl" value="60"/>
+      <param name="auth-calls" value="false"/>
+      <param name="inbound-late-negotiation" value="true"/>
+      <param name="inbound-zrtp-passthru" value="true"/>
+      <param name="rtp-ip" value="$${external_rtp_ip}"/>
+      <param name="sip-ip" value="$${external_sip_ip}"/>
+      <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+      <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+      <param name="apply-nat-acl" value="nat.auto"/>
+      <param name="apply-inbound-acl" value="providers"/>
+      <param name="local-network-acl" value="localnet.auto"/>
+      <param name="dtmf-type" value="rfc2833"/>
+      <param name="liberal-dtmf" value="true"/>
+      <param name="enable-timer" value="false"/>
+      <param name="minimum-session-expires" value="120"/>
+      <param name="apply-candidate-acl" value="wan_v4.auto"/>
+      <param name="rtp-rewrite-timestamps" value="true"/>
+      <param name="pass-rfc2833" value="true"/>
+      <param name="inbound-use-callid-as-uuid" value="true"/>
+      <param name="outbound-use-uuid-as-callid" value="true"/>
+      <param name="rtp-autoflush-during-bridge" value="false"/>
+      <param name="auto-rtp-bugs" value="clear"/>
+      <param name="disable-rtp-auto-adjust" value="true"/>
+      
+      <!-- External Profile Security -->
+      <param name="accept-blind-reg" value="false"/>
+      <param name="accept-blind-auth" value="false"/>
+      <param name="suppress-cng" value="true"/>
+      <param name="NDLB-force-rport" value="true"/>
+      <param name="NDLB-broken-auth-hash" value="true"/>
+      <param name="NDLB-received-in-nat-reg-contact" value="true"/>
+      
+      <!-- Agba AI External Settings -->
+      <param name="agba-ai-enabled" value="true"/>
+      <param name="agba-trunk-routing" value="true"/>
+      <param name="agba-call-screening" value="true"/>
+      
+      <!-- Performance Settings -->
+      <param name="max-proceeding" value="3000"/>
+      <param name="session-timeout" value="1800"/>
+      <param name="rtp-timeout-sec" value="300"/>
+      <param name="rtp-hold-timeout-sec" value="1800"/>
+    </settings>
+  </profile>
+
+  <!-- WebRTC Profile (for future Phase 2.2) -->
+  <profile name="webrtc">
+    <aliases>
+      <alias name="wss"/>
+    </aliases>
+    <domains>
+      <domain name="all" alias="false" parse="true"/>
+    </domains>
+    <settings>
+      <param name="debug" value="0"/>
+      <param name="sip-trace" value="no"/>
+      <param name="sip-capture" value="no"/>
+      <param name="watchdog-enabled" value="no"/>
+      <param name="watchdog-step-timeout" value="30000"/>
+      <param name="watchdog-event-timeout" value="30000"/>
+      <param name="log-auth-failures" value="false"/>
+      <param name="forward-unsolicited-mwi-notify" value="false"/>
+      <param name="context" value="default"/>
+      <param name="rfc2833-pt" value="101"/>
+      <param name="sip-port" value="5066"/>
+      <param name="dialplan" value="XML"/>
+      <param name="dtmf-duration" value="2000"/>
+      <param name="inbound-codec-prefs" value="OPUS,VP8"/>
+      <param name="outbound-codec-prefs" value="OPUS,VP8"/>
+      <param name="rtp-timer-name" value="soft"/>
+      <param name="local-network-acl" value="localnet.auto"/>
+      <param name="manage-presence" value="true"/>
+      <param name="inbound-codec-negotiation" value="generous"/>
+      <param name="nonce-ttl" value="60"/>
+      <param name="auth-calls" value="true"/>
+      <param name="inbound-late-negotiation" value="true"/>
+      <param name="rtp-ip" value="$${local_ip_v4}"/>
+      <param name="sip-ip" value="$${local_ip_v4}"/>
+      <param name="apply-nat-acl" value="nat.auto"/>
+      <param name="apply-inbound-acl" value="domains"/>
+      <param name="dtmf-type" value="rfc2833"/>
+      <param name="challenge-realm" value="auto_from"/>
+      <param name="disable-transcoding" value="false"/>
+      <param name="rtp-timeout-sec" value="300"/>
+      <param name="rtp-hold-timeout-sec" value="1800"/>
+      <param name="tls" value="true"/>
+      <param name="tls-only" value="false"/>
+      <param name="tls-bind-params" value="transport=wss"/>
+      <param name="tls-sip-port" value="7443"/>
+      <param name="tls-cert-dir" value="/usr/local/freeswitch/certs"/>
+      <param name="tls-version" value="tlsv1,tlsv1.1,tlsv1.2"/>
+      <param name="ws-binding" value=":5066"/>
+      <param name="wss-binding" value=":7443"/>
+      <param name="rtcp-audio-interval-msec" value="5000"/>
+      <param name="rtcp-video-interval-msec" value="5000"/>
+      
+      <!-- WebRTC Specific -->
+      <param name="liberal-dtmf" value="true"/>
+      <param name="web-socket-same-origin" value="false"/>
+      <param name="web-socket-origin" value="*"/>
+      <param name="enable-100rel" value="true"/>
+      <param name="disable-srv" value="false"/>
+      <param name="disable-naptr" value="false"/>
+      
+      <!-- Agba AI WebRTC Settings -->
+      <param name="agba-webrtc-enabled" value="true"/>
+      <param name="agba-browser-calls" value="true"/>
+      <param name="agba-webrtc-recording" value="true"/>
+    </settings>
+  </profile>
+
+</include>

@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Agba AI Platform FreeSWITCH Dialplan -->
+<include>
+  <context name="default">
+    
+    <!-- Agba AI Voice Assistant Entry Point -->
+    <extension name="agba_voice_ai">
+      <condition field="destination_number" expression="^(agba|ai|assistant)$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="answer"/>
+        <action application="sleep" data="1000"/>
+        <action application="playback" data="ivr/ivr-welcome_to_agba_ai.wav"/>
+        <action application="lua" data="agba_voice_handler.lua"/>
+      </condition>
+    </extension>
+
+    <!-- Inbound Call Routing -->
+    <extension name="inbound_routing">
+      <condition field="destination_number" expression="^(\d{10})$">
+        <action application="set" data="call_direction=inbound"/>
+        <action application="set" data="agba_call_id=${uuid()}"/>
+        <action application="export" data="agba_call_id=${agba_call_id}"/>
+        <action application="set" data="effective_caller_id_number=${caller_id_number}"/>
+        <action application="set" data="effective_caller_id_name=${caller_id_name}"/>
+        
+        <!-- Log call start -->
+        <action application="lua" data="agba_call_logger.lua start"/>
+        
+        <!-- Check if recording is enabled -->
+        <action application="set" data="RECORD_TITLE=Call_${agba_call_id}"/>
+        <action application="set" data="RECORD_COPYRIGHT=Agba AI Platform"/>
+        <action application="set" data="RECORD_SOFTWARE=FreeSWITCH"/>
+        <action application="set" data="RECORD_ARTIST=Agba AI"/>
+        <action application="set" data="RECORD_COMMENT=Agba AI Voice Call Recording"/>
+        <action application="set" data="RECORD_DATE=${strftime(%Y-%m-%d %H:%M:%S)}"/>
+        
+        <!-- Start recording if enabled -->
+        <action application="record_session" data="${recordings_dir}/${agba_call_id}.wav"/>
+        
+        <!-- Route to appropriate handler -->
+        <action application="transfer" data="agba_call_handler XML default"/>
+      </condition>
+    </extension>
+
+    <!-- Agba Call Handler -->
+    <extension name="agba_call_handler">
+      <condition field="destination_number" expression="^agba_call_handler$">
+        <action application="answer"/>
+        <action application="sleep" data="500"/>
+        
+        <!-- Play welcome message -->
+        <action application="playback" data="ivr/ivr-welcome.wav"/>
+        
+        <!-- Start AI conversation -->
+        <action application="lua" data="agba_ai_conversation.lua"/>
+        
+        <!-- If AI conversation fails, transfer to human -->
+        <action application="transfer" data="human_agent XML default"/>
+      </condition>
+    </extension>
+
+    <!-- Human Agent Transfer -->
+    <extension name="human_agent">
+      <condition field="destination_number" expression="^human_agent$">
+        <action application="playback" data="ivr/ivr-please_hold.wav"/>
+        <action application="bridge" data="user/agent@${domain_name}"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- Outbound Call Routing -->
+    <extension name="outbound_routing">
+      <condition field="destination_number" expression="^(\d{11})$">
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="agba_call_id=${uuid()}"/>
+        <action application="export" data="agba_call_id=${agba_call_id}"/>
+        
+        <!-- Log call start -->
+        <action application="lua" data="agba_call_logger.lua start"/>
+        
+        <!-- Route through default gateway -->
+        <action application="bridge" data="sofia/gateway/${default_gateway}/$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- Emergency Calls -->
+    <extension name="emergency">
+      <condition field="destination_number" expression="^(911|112|999)$">
+        <action application="set" data="call_direction=emergency"/>
+        <action application="set" data="agba_call_id=${uuid()}"/>
+        <action application="bridge" data="sofia/gateway/${emergency_gateway}/$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- Conference Rooms -->
+    <extension name="conference">
+      <condition field="destination_number" expression="^conf(\d{4})$">
+        <action application="answer"/>
+        <action application="conference" data="$1@default"/>
+      </condition>
+    </extension>
+
+    <!-- Echo Test -->
+    <extension name="echo">
+      <condition field="destination_number" expression="^(echo|9196)$">
+        <action application="answer"/>
+        <action application="echo"/>
+      </condition>
+    </extension>
+
+    <!-- Hold Music Test -->
+    <extension name="hold_music">
+      <condition field="destination_number" expression="^9664$">
+        <action application="answer"/>
+        <action application="playback" data="${hold_music}"/>
+      </condition>
+    </extension>
+
+    <!-- Call Recording Playback -->
+    <extension name="playback_recording">
+      <condition field="destination_number" expression="^play_(\w+)$">
+        <action application="answer"/>
+        <action application="playback" data="${recordings_dir}/$1.wav"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- Voicemail -->
+    <extension name="voicemail">
+      <condition field="destination_number" expression="^vm(\d+)$">
+        <action application="answer"/>
+        <action application="sleep" data="1000"/>
+        <action application="voicemail" data="default ${domain_name} $1"/>
+      </condition>
+    </extension>
+
+    <!-- Call Transfer -->
+    <extension name="transfer">
+      <condition field="destination_number" expression="^transfer_(\d+)$">
+        <action application="transfer" data="$1 XML default"/>
+      </condition>
+    </extension>
+
+    <!-- Call Parking -->
+    <extension name="park">
+      <condition field="destination_number" expression="^park(\d+)$">
+        <action application="set" data="park_timeout=300"/>
+        <action application="park" data="$1@default"/>
+      </condition>
+    </extension>
+
+    <!-- Unpark Calls -->
+    <extension name="unpark">
+      <condition field="destination_number" expression="^unpark(\d+)$">
+        <action application="unpark" data="$1@default"/>
+      </condition>
+    </extension>
+
+    <!-- Call Pickup -->
+    <extension name="pickup">
+      <condition field="destination_number" expression="^\*8(\d+)$">
+        <action application="pickup" data="$1@default"/>
+      </condition>
+    </extension>
+
+    <!-- Feature Codes -->
+    <extension name="feature_codes">
+      <condition field="destination_number" expression="^\*(\d+)$">
+        <action application="answer"/>
+        <action application="lua" data="agba_feature_handler.lua $1"/>
+      </condition>
+    </extension>
+
+    <!-- Default Catch-All -->
+    <extension name="catch_all">
+      <condition field="destination_number" expression="^(.*)$">
+        <action application="answer"/>
+        <action application="sleep" data="1000"/>
+        <action application="playback" data="ivr/ivr-that_was_an_invalid_entry.wav"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+  </context>
+
+  <!-- Public Context for Unauthenticated Calls -->
+  <context name="public">
+    
+    <!-- Anti-fraud protection -->
+    <extension name="unloop">
+      <condition field="${unroll_loops}" expression="^true$"/>
+      <condition field="${sip_looped_call}" expression="^true$">
+        <action application="deflect" data="${destination_number}"/>
+      </condition>
+    </extension>
+
+    <!-- Block unwanted calls -->
+    <extension name="block_spam">
+      <condition field="caller_id_number" expression="^(anonymous|unknown|private)$">
+        <action application="respond" data="403 Forbidden"/>
+      </condition>
+    </extension>
+
+    <!-- Route authenticated calls to default context -->
+    <extension name="public_routing">
+      <condition field="destination_number" expression="^(.*)$">
+        <action application="set" data="domain_name=${domain_name}"/>
+        <action application="transfer" data="$1 XML default"/>
+      </condition>
+    </extension>
+
+  </context>
+
+  <!-- Features Context -->
+  <context name="features">
+    
+    <!-- Call Recording Control -->
+    <extension name="record_start">
+      <condition field="destination_number" expression="^\*1$">
+        <action application="record_session" data="${recordings_dir}/${uuid}.wav"/>
+        <action application="playback" data="ivr/ivr-recording_started.wav"/>
+      </condition>
+    </extension>
+
+    <extension name="record_stop">
+      <condition field="destination_number" expression="^\*2$">
+        <action application="stop_record_session" data="${recordings_dir}/${uuid}.wav"/>
+        <action application="playback" data="ivr/ivr-recording_stopped.wav"/>
+      </condition>
+    </extension>
+
+    <!-- Call Hold -->
+    <extension name="hold">
+      <condition field="destination_number" expression="^\*3$">
+        <action application="hold"/>
+        <action application="playback" data="${hold_music}"/>
+      </condition>
+    </extension>
+
+    <!-- Call Resume -->
+    <extension name="resume">
+      <condition field="destination_number" expression="^\*4$">
+        <action application="unhold"/>
+      </condition>
+    </extension>
+
+  </context>
+
+</include>

@@ -45,10 +45,10 @@ The Agba Voice AI Platform is a comprehensive solution that combines cutting-edg
 - ✅ **Security**: TLS, encryption, and access control
 - ✅ **Scalability**: Kubernetes deployment with auto-scaling
 
-### Next Steps 🔄
-- Begin Phase 2: Telephony and WebRTC Integration
-- FreeSWITCH cluster deployment and configuration
-- WebRTC gateway implementation for browser-based calls
+### Phase 2 Progress 🚀
+- ✅ **FreeSWITCH Service**: Complete telephony platform with SIP integration
+- 🚧 **WebRTC Gateway**: Browser-based voice calls (Next milestone)
+- 📋 **Telephony Gateway**: Advanced call routing and management
 
 ## 🏗️ Architecture
 
@@ -68,19 +68,20 @@ The Agba Voice AI Platform is a comprehensive solution that combines cutting-edg
 └─────────────┴─────────────┴─────────────┴─────────────┴─────────┘
 ```
 
-### Core Services (12 Microservices)
-1. **API Gateway** - Request routing and authentication
-2. **Telephony Gateway** - PSTN/VoIP call handling
-3. **WebRTC Service** - Browser-based voice communication
-4. **AI/ML Pipeline** - Speech processing and LLM integration
-5. **Analytics Service** - Real-time analytics and insights
-6. **Configuration Service** - Agent and workflow management
-7. **Portal Service** - Self-service portal backend
-8. **Recording Service** - Call recording and transcription
-9. **Notification Service** - Webhook and event management
-10. **Biometrics Service** - Voice authentication
-11. **Workflow Engine** - Conversation flow execution
-12. **Monitoring Service** - Health checks and observability
+### Core Services (13 Microservices)
+1. **API Gateway** (✅) - Request routing and authentication
+2. **FreeSWITCH Service** (✅) - SIP telephony platform and call management
+3. **Telephony Gateway** - Advanced PSTN/VoIP call routing
+4. **WebRTC Service** - Browser-based voice communication
+5. **AI/ML Pipeline** - Speech processing and LLM integration
+6. **Analytics Service** - Real-time analytics and insights
+7. **Configuration Service** (✅) - Agent and workflow management
+8. **Portal Service** - Self-service portal backend
+9. **Recording Service** (✅) - Call recording and transcription
+10. **Notification Service** (✅) - Webhook and event management
+11. **User Management Service** (✅) - Authentication and user management
+12. **Monitoring Service** (✅) - Health checks and observability
+13. **Biometrics Service** - Voice authentication and security
 
 ## 🛠️ Technology Stack
 
