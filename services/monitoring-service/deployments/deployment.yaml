@@ -1,0 +1,785 @@
+# Monitoring Service Deployment for Agba Voice AI Platform
+# Comprehensive monitoring with metrics aggregation, alerting, and health checks
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitoring-service-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    environment: production
+    version: "1.0.0"
+    
+    server:
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+    
+    database:
+      driver: postgres
+      dsn: "postgresql://agba_user:${POSTGRES_PASSWORD}@pgbouncer:5432/agba_core?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300s
+    
+    redis:
+      address: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 2
+      pool_size: 10
+    
+    nats:
+      url: "nats://nats-client:4222"
+      username: "agba_user"
+      password: "${NATS_PASSWORD}"
+    
+    prometheus:
+      url: "http://prometheus:9090"
+      timeout: 30s
+      max_connections: 10
+      retention_period: 720h
+    
+    alerting:
+      enabled: true
+      default_severity: "warning"
+      evaluation_interval: 30s
+      notification_timeout: 10s
+      max_retries: 3
+      retry_interval: 60s
+      silence_default_duration: 1h
+      
+      slack:
+        enabled: true
+        webhook_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#alerts"
+        username: "Agba Monitoring"
+      
+      email:
+        enabled: true
+        smtp_host: "${SMTP_HOST}"
+        smtp_port: 587
+        username: "${SMTP_USERNAME}"
+        password: "${SMTP_PASSWORD}"
+        from_email: "alerts@agba.ai"
+        from_name: "Agba Monitoring"
+    
+    collection:
+      interval: 30s
+      batch_size: 100
+      buffer_size: 1000
+      flush_interval: 60s
+      retention_period: 2160h
+      high_resolution_period: 24h
+      medium_resolution_period: 168h
+      
+      service_discovery:
+        enabled: true
+        kubernetes_enabled: true
+        refresh_interval: 60s
+        namespace: "agba-system"
+        label_selector: "app"
+      
+      health_check:
+        enabled: true
+        interval: 30s
+        timeout: 10s
+        failure_threshold: 3
+        success_threshold: 1
+    
+    monitoring:
+      enabled: true
+      metrics_path: "/metrics"
+      request_logging: true
+      slow_request_threshold: 1s
+
+---
+# Monitoring Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring-service
+  namespace: agba-system
+  labels:
+    app: monitoring-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: monitoring-service
+  template:
+    metadata:
+      labels:
+        app: monitoring-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: monitoring-service
+      containers:
+      - name: monitoring-service
+        image: agba/monitoring-service:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: AGBA_MONITORING_ENVIRONMENT
+          value: "production"
+        - name: AGBA_MONITORING_SERVER_PORT
+          value: "8080"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth
+              key: agba-password
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: monitoring-secrets
+              key: slack-webhook-url
+              optional: true
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: monitoring-secrets
+              key: smtp-host
+              optional: true
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: monitoring-secrets
+              key: smtp-username
+              optional: true
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: monitoring-secrets
+              key: smtp-password
+              optional: true
+        volumeMounts:
+        - name: config
+          mountPath: /etc/monitoring-service
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: monitoring-service-config
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+# Monitoring Service ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitoring-service
+  namespace: agba-system
+
+---
+# ClusterRole for monitoring service discovery
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitoring-service
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding for monitoring service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitoring-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monitoring-service
+subjects:
+- kind: ServiceAccount
+  name: monitoring-service
+  namespace: agba-system
+
+---
+# Monitoring Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring-service
+  namespace: agba-system
+  labels:
+    app: monitoring-service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: monitoring-service
+
+---
+# Monitoring Service HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: monitoring-service-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: monitoring-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# Monitoring Service PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: monitoring-service-pdb
+  namespace: agba-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: monitoring-service
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: monitoring-service
+  namespace: agba-system
+  labels:
+    app: monitoring-service
+spec:
+  selector:
+    matchLabels:
+      app: monitoring-service
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for Monitoring Service Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: monitoring-service-alerts
+  namespace: agba-system
+  labels:
+    app: monitoring-service
+spec:
+  groups:
+  - name: monitoring-service
+    rules:
+    - alert: MonitoringServiceDown
+      expr: up{job="monitoring-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: Monitoring Service is down
+        description: "Monitoring Service instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: MonitoringServiceHighLatency
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="monitoring-service"}[5m])) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Monitoring Service high latency
+        description: "Monitoring Service 95th percentile latency is above 1s\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: MonitoringServiceHighErrorRate
+      expr: rate(http_requests_total{job="monitoring-service",status=~"5.."}[5m]) / rate(http_requests_total{job="monitoring-service"}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Monitoring Service high error rate
+        description: "Monitoring Service error rate is above 5%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: MonitoringServiceMemoryHigh
+      expr: container_memory_usage_bytes{pod=~"monitoring-service-.*"} / container_spec_memory_limit_bytes > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Monitoring Service high memory usage
+        description: "Monitoring Service memory usage is above 80%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: MonitoringServiceAlertProcessingFailed
+      expr: increase(monitoring_alert_processing_failures_total[5m]) > 5
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: Monitoring Service alert processing failures
+        description: "Monitoring Service has failed to process alerts\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# Monitoring Database Schema Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: monitoring-service-schema-setup
+  namespace: agba-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: schema-setup
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h pgbouncer -p 5432 -U agba_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 5
+          done
+          
+          # Create monitoring tables
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h pgbouncer -U agba_user -d agba_core << 'EOF'
+          
+          -- Monitoring types enums
+          CREATE TYPE metric_type AS ENUM ('counter', 'gauge', 'histogram', 'summary');
+          CREATE TYPE alert_severity AS ENUM ('critical', 'warning', 'info');
+          CREATE TYPE alert_status AS ENUM ('firing', 'resolved', 'acknowledged', 'silenced');
+          CREATE TYPE service_status AS ENUM ('healthy', 'unhealthy', 'degraded', 'unknown');
+          CREATE TYPE incident_status AS ENUM ('open', 'in_progress', 'resolved', 'closed');
+          CREATE TYPE notification_status AS ENUM ('pending', 'sent', 'failed', 'retrying');
+          
+          -- Metrics table
+          CREATE TABLE IF NOT EXISTS metrics (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            type metric_type NOT NULL,
+            value DOUBLE PRECISION NOT NULL,
+            labels JSONB DEFAULT '{}',
+            timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+            service_name VARCHAR(255),
+            instance VARCHAR(255),
+            job VARCHAR(255),
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Alerts table
+          CREATE TABLE IF NOT EXISTS alerts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            severity alert_severity NOT NULL,
+            status alert_status NOT NULL DEFAULT 'firing',
+            labels JSONB DEFAULT '{}',
+            annotations JSONB DEFAULT '{}',
+            starts_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            ends_at TIMESTAMP WITH TIME ZONE,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            rule_id UUID,
+            rule_name VARCHAR(255),
+            notified_at TIMESTAMP WITH TIME ZONE,
+            acked_at TIMESTAMP WITH TIME ZONE,
+            acked_by UUID,
+            resolved_at TIMESTAMP WITH TIME ZONE,
+            resolved_by UUID,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Alert rules table
+          CREATE TABLE IF NOT EXISTS alert_rules (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            query TEXT NOT NULL,
+            condition VARCHAR(100) NOT NULL,
+            threshold DOUBLE PRECISION NOT NULL,
+            duration INTERVAL NOT NULL,
+            severity alert_severity NOT NULL,
+            labels JSONB DEFAULT '{}',
+            annotations JSONB DEFAULT '{}',
+            enabled BOOLEAN DEFAULT TRUE,
+            group_name VARCHAR(255),
+            interval INTERVAL DEFAULT '30s',
+            notification_channels TEXT[] DEFAULT '{}',
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            metadata JSONB DEFAULT '{}'
+          );
+          
+          -- Services table
+          CREATE TABLE IF NOT EXISTS services (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL UNIQUE,
+            description TEXT,
+            status service_status NOT NULL DEFAULT 'unknown',
+            version VARCHAR(100),
+            environment VARCHAR(100),
+            health_endpoint VARCHAR(500),
+            metrics_endpoint VARCHAR(500),
+            labels JSONB DEFAULT '{}',
+            tags TEXT[] DEFAULT '{}',
+            health_check JSONB DEFAULT '{}',
+            last_health_check TIMESTAMP WITH TIME ZONE,
+            last_seen TIMESTAMP WITH TIME ZONE,
+            uptime INTERVAL DEFAULT '0s',
+            dependencies JSONB DEFAULT '[]',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            metadata JSONB DEFAULT '{}'
+          );
+          
+          -- Health checks table
+          CREATE TABLE IF NOT EXISTS health_checks (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+            service_name VARCHAR(255) NOT NULL,
+            status service_status NOT NULL,
+            response_time INTERVAL,
+            status_code INTEGER,
+            message TEXT,
+            details JSONB DEFAULT '{}',
+            timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Dashboards table
+          CREATE TABLE IF NOT EXISTS dashboards (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            tags TEXT[] DEFAULT '{}',
+            config JSONB NOT NULL DEFAULT '{}',
+            panels JSONB NOT NULL DEFAULT '[]',
+            is_public BOOLEAN DEFAULT FALSE,
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            metadata JSONB DEFAULT '{}'
+          );
+          
+          -- Incidents table
+          CREATE TABLE IF NOT EXISTS incidents (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            severity alert_severity NOT NULL,
+            status incident_status NOT NULL DEFAULT 'open',
+            affected_services UUID[] DEFAULT '{}',
+            root_cause TEXT,
+            resolution TEXT,
+            started_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            detected_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            resolved_at TIMESTAMP WITH TIME ZONE,
+            assigned_to UUID,
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            labels JSONB DEFAULT '{}',
+            tags TEXT[] DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            metadata JSONB DEFAULT '{}'
+          );
+          
+          -- Notification channels table
+          CREATE TABLE IF NOT EXISTS notification_channels (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            type VARCHAR(100) NOT NULL,
+            config JSONB NOT NULL DEFAULT '{}',
+            enabled BOOLEAN DEFAULT TRUE,
+            severities alert_severity[] DEFAULT '{}',
+            services TEXT[] DEFAULT '{}',
+            labels JSONB DEFAULT '{}',
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Alert notifications table
+          CREATE TABLE IF NOT EXISTS alert_notifications (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            alert_id UUID NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+            channel_id UUID NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+            channel_type VARCHAR(100) NOT NULL,
+            status notification_status NOT NULL DEFAULT 'pending',
+            message TEXT,
+            sent_at TIMESTAMP WITH TIME ZONE,
+            error TEXT,
+            retries INTEGER DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Indexes for performance
+          CREATE INDEX IF NOT EXISTS idx_metrics_name_timestamp ON metrics(name, timestamp DESC);
+          CREATE INDEX IF NOT EXISTS idx_metrics_service_timestamp ON metrics(service_name, timestamp DESC);
+          CREATE INDEX IF NOT EXISTS idx_metrics_labels ON metrics USING GIN(labels);
+          CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON metrics(timestamp DESC);
+          
+          CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
+          CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity);
+          CREATE INDEX IF NOT EXISTS idx_alerts_starts_at ON alerts(starts_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_alerts_rule_id ON alerts(rule_id);
+          CREATE INDEX IF NOT EXISTS idx_alerts_labels ON alerts USING GIN(labels);
+          
+          CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+          CREATE INDEX IF NOT EXISTS idx_alert_rules_group ON alert_rules(group_name);
+          
+          CREATE INDEX IF NOT EXISTS idx_services_status ON services(status);
+          CREATE INDEX IF NOT EXISTS idx_services_environment ON services(environment);
+          CREATE INDEX IF NOT EXISTS idx_services_labels ON services USING GIN(labels);
+          
+          CREATE INDEX IF NOT EXISTS idx_health_checks_service_id ON health_checks(service_id);
+          CREATE INDEX IF NOT EXISTS idx_health_checks_timestamp ON health_checks(timestamp DESC);
+          CREATE INDEX IF NOT EXISTS idx_health_checks_status ON health_checks(status);
+          
+          CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+          CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
+          CREATE INDEX IF NOT EXISTS idx_incidents_started_at ON incidents(started_at DESC);
+          
+          CREATE INDEX IF NOT EXISTS idx_notification_channels_type ON notification_channels(type);
+          CREATE INDEX IF NOT EXISTS idx_notification_channels_enabled ON notification_channels(enabled);
+          
+          CREATE INDEX IF NOT EXISTS idx_alert_notifications_alert_id ON alert_notifications(alert_id);
+          CREATE INDEX IF NOT EXISTS idx_alert_notifications_status ON alert_notifications(status);
+          
+          -- Partitioning for metrics (by day)
+          CREATE TABLE IF NOT EXISTS metrics_y2025m06d09 PARTITION OF metrics
+          FOR VALUES FROM ('2025-06-09') TO ('2025-06-10');
+          
+          -- Partitioning for health checks (by day)
+          CREATE TABLE IF NOT EXISTS health_checks_y2025m06d09 PARTITION OF health_checks
+          FOR VALUES FROM ('2025-06-09') TO ('2025-06-10');
+          
+          -- Functions for automatic cleanup
+          CREATE OR REPLACE FUNCTION cleanup_old_metrics()
+          RETURNS void AS $$
+          BEGIN
+            DELETE FROM metrics WHERE created_at < NOW() - INTERVAL '90 days';
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          CREATE OR REPLACE FUNCTION cleanup_old_health_checks()
+          RETURNS void AS $$
+          BEGIN
+            DELETE FROM health_checks WHERE created_at < NOW() - INTERVAL '30 days';
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          EOF
+          
+          echo "Monitoring service schema setup completed"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+      restartPolicy: OnFailure
+
+---
+# Network Policy for Monitoring Service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-service-netpol
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: monitoring-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from same namespace for service discovery
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow egress to PostgreSQL via PgBouncer
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow egress to NATS
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow egress to Prometheus
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+  # Allow egress to all services for health checks and metrics collection
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: 3000
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow HTTPS for external notifications
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 587
+    - protocol: TCP
+      port: 25
