@@ -1,0 +1,590 @@
+# Monitoring Configuration for NATS and Redis
+# Prometheus exporters and alerting rules for messaging infrastructure
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-exporter-config
+  namespace: agba-system
+data:
+  nats-exporter.conf: |
+    # NATS Exporter Configuration
+    listen: "0.0.0.0:7777"
+    
+    # NATS server endpoints
+    servers:
+      - "nats://nats-client:4222"
+    
+    # Authentication
+    username: "agba_user"
+    password: "${AGBA_PASSWORD}"
+    
+    # Metrics configuration
+    metrics:
+      namespace: "nats"
+      
+    # JetStream metrics
+    jetstream: true
+    
+    # Connection settings
+    timeout: 5s
+    
+    # TLS configuration
+    tls:
+      enabled: true
+      cert_file: "/etc/nats-certs/tls.crt"
+      key_file: "/etc/nats-certs/tls.key"
+      ca_file: "/etc/nats-certs/ca.crt"
+
+---
+# NATS Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-exporter
+  namespace: agba-system
+  labels:
+    app: nats-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-exporter
+  template:
+    metadata:
+      labels:
+        app: nats-exporter
+    spec:
+      containers:
+      - name: nats-exporter
+        image: natsio/prometheus-nats-exporter:0.12.0
+        ports:
+        - containerPort: 7777
+          name: metrics
+        args:
+        - "-config=/etc/nats-exporter/nats-exporter.conf"
+        env:
+        - name: AGBA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth
+              key: agba-password
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nats-exporter
+        - name: tls-certs
+          mountPath: /etc/nats-certs
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 7777
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 7777
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: nats-exporter-config
+      - name: tls-certs
+        secret:
+          secretName: nats-tls
+
+---
+# Redis Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: agba-system
+  labels:
+    app: redis-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+    spec:
+      containers:
+      - name: redis-exporter
+        image: oliver006/redis_exporter:v1.55.0
+        ports:
+        - containerPort: 9121
+          name: metrics
+        env:
+        - name: REDIS_ADDR
+          value: "redis://redis-master:6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: REDIS_EXPORTER_INCL_SYSTEM_METRICS
+          value: "true"
+        - name: REDIS_EXPORTER_CHECK_KEYS
+          value: "agba:*,session:*,cache:*"
+        - name: REDIS_EXPORTER_CHECK_SINGLE_KEYS
+          value: "agba:stats,agba:config"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 9121
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 9121
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# Redis Sentinel Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-sentinel-exporter
+  namespace: agba-system
+  labels:
+    app: redis-sentinel-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-sentinel-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel-exporter
+    spec:
+      containers:
+      - name: redis-sentinel-exporter
+        image: oliver006/redis_exporter:v1.55.0
+        ports:
+        - containerPort: 9121
+          name: metrics
+        env:
+        - name: REDIS_ADDR
+          value: "redis://redis-sentinel:26379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: REDIS_EXPORTER_IS_SENTINEL
+          value: "true"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+---
+# NATS Exporter Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-exporter
+  namespace: agba-system
+  labels:
+    app: nats-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "7777"
+spec:
+  ports:
+  - port: 7777
+    targetPort: 7777
+    name: metrics
+  selector:
+    app: nats-exporter
+
+---
+# Redis Exporter Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: agba-system
+  labels:
+    app: redis-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+spec:
+  ports:
+  - port: 9121
+    targetPort: 9121
+    name: metrics
+  selector:
+    app: redis-exporter
+
+---
+# Redis Sentinel Exporter Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel-exporter
+  namespace: agba-system
+  labels:
+    app: redis-sentinel-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+spec:
+  ports:
+  - port: 9121
+    targetPort: 9121
+    name: metrics
+  selector:
+    app: redis-sentinel-exporter
+
+---
+# ServiceMonitor for NATS
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nats-exporter
+  namespace: agba-system
+  labels:
+    app: nats-exporter
+spec:
+  selector:
+    matchLabels:
+      app: nats-exporter
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# ServiceMonitor for Redis
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: redis-exporter
+  namespace: agba-system
+  labels:
+    app: redis-exporter
+spec:
+  selector:
+    matchLabels:
+      app: redis-exporter
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for NATS Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nats-alerts
+  namespace: agba-system
+  labels:
+    app: nats
+spec:
+  groups:
+  - name: nats
+    rules:
+    - alert: NATSDown
+      expr: up{job="nats-exporter"} == 0
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: NATS server is down
+        description: "NATS server instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NATSHighConnectionCount
+      expr: nats_connz_num_connections > 1000
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: NATS high connection count
+        description: "NATS server has high number of connections\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NATSSlowConsumer
+      expr: nats_connz_slow_consumers > 0
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: NATS slow consumer detected
+        description: "NATS has slow consumers\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NATSJetStreamStorageHigh
+      expr: (nats_jetstream_server_store_bytes / nats_jetstream_server_store_max_bytes) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: NATS JetStream storage usage high
+        description: "JetStream storage usage is above 80%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: NATSJetStreamStorageFull
+      expr: (nats_jetstream_server_store_bytes / nats_jetstream_server_store_max_bytes) > 0.95
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: NATS JetStream storage almost full
+        description: "JetStream storage usage is above 95%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# PrometheusRule for Redis Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: redis-alerts
+  namespace: agba-system
+  labels:
+    app: redis
+spec:
+  groups:
+  - name: redis
+    rules:
+    - alert: RedisDown
+      expr: redis_up == 0
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: Redis instance is down
+        description: "Redis instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisMemoryHigh
+      expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: Redis memory usage high
+        description: "Redis memory usage is above 80%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisMemoryFull
+      expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.95
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: Redis memory usage critical
+        description: "Redis memory usage is above 95%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisConnectionsHigh
+      expr: redis_connected_clients > 800
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: Redis high number of connections
+        description: "Redis has high number of connections\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisReplicationLag
+      expr: redis_master_repl_offset - redis_slave_repl_offset > 1000
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: Redis replication lag
+        description: "Redis replication lag is high\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisSentinelDown
+      expr: redis_sentinel_masters < 1
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: Redis Sentinel has no masters
+        description: "Redis Sentinel is not monitoring any masters\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RedisSlowQueries
+      expr: increase(redis_slowlog_length[1m]) > 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: Redis slow queries detected
+        description: "Redis has slow queries\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# Grafana Dashboard ConfigMap for NATS
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-dashboard
+  namespace: agba-system
+  labels:
+    grafana_dashboard: "1"
+data:
+  nats-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "NATS Monitoring",
+        "tags": ["nats", "messaging"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "title": "NATS Server Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "up{job=\"nats-exporter\"}",
+                "legendFormat": "{{instance}}"
+              }
+            ]
+          },
+          {
+            "title": "Connection Count",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "nats_connz_num_connections",
+                "legendFormat": "Connections"
+              }
+            ]
+          },
+          {
+            "title": "Message Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(nats_varz_in_msgs[5m])",
+                "legendFormat": "Inbound"
+              },
+              {
+                "expr": "rate(nats_varz_out_msgs[5m])",
+                "legendFormat": "Outbound"
+              }
+            ]
+          },
+          {
+            "title": "JetStream Storage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "nats_jetstream_server_store_bytes",
+                "legendFormat": "Used Storage"
+              },
+              {
+                "expr": "nats_jetstream_server_store_max_bytes",
+                "legendFormat": "Max Storage"
+              }
+            ]
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }
+
+---
+# Grafana Dashboard ConfigMap for Redis
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-dashboard
+  namespace: agba-system
+  labels:
+    grafana_dashboard: "1"
+data:
+  redis-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Redis Monitoring",
+        "tags": ["redis", "cache"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "title": "Redis Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "redis_up",
+                "legendFormat": "{{instance}}"
+              }
+            ]
+          },
+          {
+            "title": "Memory Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "redis_memory_used_bytes",
+                "legendFormat": "Used Memory"
+              },
+              {
+                "expr": "redis_memory_max_bytes",
+                "legendFormat": "Max Memory"
+              }
+            ]
+          },
+          {
+            "title": "Connected Clients",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "redis_connected_clients",
+                "legendFormat": "Clients"
+              }
+            ]
+          },
+          {
+            "title": "Commands Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(redis_commands_processed_total[5m])",
+                "legendFormat": "Commands/sec"
+              }
+            ]
+          },
+          {
+            "title": "Keyspace",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "redis_db_keys",
+                "legendFormat": "Keys DB{{db}}"
+              }
+            ]
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }
