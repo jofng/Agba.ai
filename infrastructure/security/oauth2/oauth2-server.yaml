@@ -1,0 +1,510 @@
+# OAuth2 Authentication Server for Agba Voice AI Platform
+# Centralized authentication and authorization service
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    # OAuth2 Server Configuration
+    server:
+      host: "0.0.0.0"
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+      
+    # Database Configuration
+    database:
+      driver: "postgres"
+      dsn: "postgresql://agba_user:${POSTGRES_PASSWORD}@pgbouncer:5432/agba_core?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300s
+      
+    # Redis Configuration for Sessions
+    redis:
+      addr: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 1
+      pool_size: 10
+      min_idle_conns: 5
+      
+    # JWT Configuration
+    jwt:
+      secret: "${JWT_SECRET}"
+      access_token_ttl: 3600s    # 1 hour
+      refresh_token_ttl: 604800s # 7 days
+      issuer: "agba-oauth2"
+      audience: "agba-api"
+      
+    # OAuth2 Configuration
+    oauth2:
+      authorization_code_ttl: 600s # 10 minutes
+      access_token_ttl: 3600s      # 1 hour
+      refresh_token_ttl: 604800s   # 7 days
+      
+    # CORS Configuration
+    cors:
+      allowed_origins:
+        - "https://dashboard.agba.ai"
+        - "https://admin.agba.ai"
+        - "https://api.agba.ai"
+      allowed_methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Authorization"
+        - "Content-Type"
+        - "X-Requested-With"
+      allow_credentials: true
+      
+    # Rate Limiting
+    rate_limit:
+      enabled: true
+      requests_per_minute: 60
+      burst: 10
+      
+    # Logging
+    logging:
+      level: "info"
+      format: "json"
+      
+    # Security
+    security:
+      bcrypt_cost: 12
+      session_timeout: 3600s
+      max_login_attempts: 5
+      lockout_duration: 900s # 15 minutes
+      
+    # Email Configuration
+    email:
+      smtp_host: "smtp.agba.ai"
+      smtp_port: 587
+      smtp_username: "noreply@agba.ai"
+      smtp_password: "${SMTP_PASSWORD}"
+      from_address: "noreply@agba.ai"
+      
+    # Templates
+    templates:
+      login_page: "/templates/login.html"
+      consent_page: "/templates/consent.html"
+      error_page: "/templates/error.html"
+
+  clients.yaml: |
+    # OAuth2 Client Configurations
+    clients:
+      # Dashboard Client
+      - client_id: "agba-dashboard"
+        client_secret: "${DASHBOARD_CLIENT_SECRET}"
+        redirect_uris:
+          - "https://dashboard.agba.ai/auth/callback"
+          - "https://admin.agba.ai/auth/callback"
+        grant_types:
+          - "authorization_code"
+          - "refresh_token"
+        response_types:
+          - "code"
+        scopes:
+          - "openid"
+          - "profile"
+          - "email"
+          - "dashboard:read"
+          - "dashboard:write"
+        public: false
+        
+      # API Client
+      - client_id: "agba-api"
+        client_secret: "${API_CLIENT_SECRET}"
+        redirect_uris:
+          - "https://api.agba.ai/auth/callback"
+        grant_types:
+          - "client_credentials"
+          - "authorization_code"
+          - "refresh_token"
+        response_types:
+          - "code"
+        scopes:
+          - "api:read"
+          - "api:write"
+          - "calls:manage"
+          - "agents:manage"
+        public: false
+        
+      # Mobile App Client
+      - client_id: "agba-mobile"
+        client_secret: ""
+        redirect_uris:
+          - "agba://auth/callback"
+        grant_types:
+          - "authorization_code"
+          - "refresh_token"
+        response_types:
+          - "code"
+        scopes:
+          - "openid"
+          - "profile"
+          - "mobile:access"
+        public: true
+        
+      # WebRTC Client
+      - client_id: "agba-webrtc"
+        client_secret: "${WEBRTC_CLIENT_SECRET}"
+        redirect_uris:
+          - "https://webrtc.agba.ai/auth/callback"
+        grant_types:
+          - "authorization_code"
+          - "refresh_token"
+        response_types:
+          - "code"
+        scopes:
+          - "webrtc:access"
+          - "calls:join"
+        public: false
+
+---
+# OAuth2 Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-server
+  namespace: agba-system
+  labels:
+    app: oauth2-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: oauth2-server
+  template:
+    metadata:
+      labels:
+        app: oauth2-server
+    spec:
+      containers:
+      - name: oauth2-server
+        image: agba/oauth2-server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: jwt-secret
+        - name: DASHBOARD_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: dashboard-client-secret
+        - name: API_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: api-client-secret
+        - name: WEBRTC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: webrtc-client-secret
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: smtp-password
+        volumeMounts:
+        - name: config
+          mountPath: /etc/oauth2
+        - name: templates
+          mountPath: /templates
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: oauth2-config
+      - name: templates
+        configMap:
+          name: oauth2-templates
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+
+---
+# OAuth2 Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-server
+  namespace: agba-system
+  labels:
+    app: oauth2-server
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  selector:
+    app: oauth2-server
+
+---
+# OAuth2 Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oauth2-secrets
+  namespace: agba-system
+type: Opaque
+data:
+  jwt-secret: YWdiYS1qd3Qtc2VjcmV0LWtleS0yMDI1 # agba-jwt-secret-key-2025 (base64)
+  dashboard-client-secret: ZGFzaGJvYXJkLWNsaWVudC1zZWNyZXQ= # dashboard-client-secret (base64)
+  api-client-secret: YXBpLWNsaWVudC1zZWNyZXQ= # api-client-secret (base64)
+  webrtc-client-secret: d2VicnRjLWNsaWVudC1zZWNyZXQ= # webrtc-client-secret (base64)
+  smtp-password: c210cC1wYXNzd29yZA== # smtp-password (base64)
+
+---
+# OAuth2 Templates ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-templates
+  namespace: agba-system
+data:
+  login.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Agba Voice AI - Login</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+            .container { max-width: 400px; margin: 50px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .logo { text-align: center; margin-bottom: 30px; }
+            .form-group { margin-bottom: 20px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input[type="email"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+            .btn { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+            .btn:hover { background: #0056b3; }
+            .error { color: #dc3545; margin-bottom: 15px; }
+            .forgot-password { text-align: center; margin-top: 15px; }
+            .forgot-password a { color: #007bff; text-decoration: none; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">
+                <h2>Agba Voice AI</h2>
+                <p>Sign in to your account</p>
+            </div>
+            {{if .Error}}
+            <div class="error">{{.Error}}</div>
+            {{end}}
+            <form method="POST" action="/auth/login">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="client_id" value="{{.ClientID}}">
+                <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+                <input type="hidden" name="state" value="{{.State}}">
+                <input type="hidden" name="scope" value="{{.Scope}}">
+                
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required value="{{.Email}}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                
+                <button type="submit" class="btn">Sign In</button>
+            </form>
+            
+            <div class="forgot-password">
+                <a href="/auth/forgot-password">Forgot your password?</a>
+            </div>
+        </div>
+    </body>
+    </html>
+
+  consent.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Agba Voice AI - Authorization</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+            .container { max-width: 500px; margin: 50px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .logo { text-align: center; margin-bottom: 30px; }
+            .client-info { background: #f8f9fa; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+            .scopes { margin: 20px 0; }
+            .scope-item { padding: 8px 0; border-bottom: 1px solid #eee; }
+            .scope-item:last-child { border-bottom: none; }
+            .buttons { display: flex; gap: 10px; margin-top: 30px; }
+            .btn { flex: 1; padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+            .btn-primary { background: #007bff; color: white; }
+            .btn-secondary { background: #6c757d; color: white; }
+            .btn:hover { opacity: 0.9; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">
+                <h2>Agba Voice AI</h2>
+                <p>Authorization Request</p>
+            </div>
+            
+            <div class="client-info">
+                <strong>{{.ClientName}}</strong> is requesting access to your account.
+            </div>
+            
+            <div class="scopes">
+                <h4>This application will be able to:</h4>
+                {{range .Scopes}}
+                <div class="scope-item">{{.Description}}</div>
+                {{end}}
+            </div>
+            
+            <form method="POST" action="/auth/consent">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="client_id" value="{{.ClientID}}">
+                <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
+                <input type="hidden" name="state" value="{{.State}}">
+                <input type="hidden" name="scope" value="{{.Scope}}">
+                
+                <div class="buttons">
+                    <button type="submit" name="action" value="deny" class="btn btn-secondary">Deny</button>
+                    <button type="submit" name="action" value="allow" class="btn btn-primary">Allow</button>
+                </div>
+            </form>
+        </div>
+    </body>
+    </html>
+
+  error.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Agba Voice AI - Error</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+            .container { max-width: 500px; margin: 50px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+            .error-icon { font-size: 48px; color: #dc3545; margin-bottom: 20px; }
+            .error-title { color: #dc3545; margin-bottom: 15px; }
+            .error-description { color: #6c757d; margin-bottom: 30px; }
+            .btn { padding: 12px 24px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+            .btn:hover { background: #0056b3; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-icon">⚠️</div>
+            <h2 class="error-title">{{.ErrorTitle}}</h2>
+            <p class="error-description">{{.ErrorDescription}}</p>
+            <a href="/" class="btn">Return to Home</a>
+        </div>
+    </body>
+    </html>
+
+---
+# OAuth2 Server HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: oauth2-server-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: oauth2-server
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# OAuth2 Server Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth2-server-ingress
+  namespace: agba-system
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - auth.agba.ai
+    secretName: oauth2-tls
+  rules:
+  - host: auth.agba.ai
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: oauth2-server
+            port:
+              number: 8080
