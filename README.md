@@ -304,6 +304,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Built with ❤️ by the Agba.ai Team**
+**Built with ❤️ by the Temlio Team**
 
 For more information, visit [agba.ai](https://agba.ai) or contact us at team@agba.ai
