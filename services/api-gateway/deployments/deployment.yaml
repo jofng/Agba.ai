@@ -1,0 +1,448 @@
+# API Gateway Deployment for Agba Voice AI Platform
+# Central gateway for all API requests with authentication, rate limiting, and routing
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    environment: production
+    version: "1.0.0"
+    
+    server:
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+    
+    auth:
+      oauth2_server_url: "http://oauth2-server:8080"
+      api_key_validator_url: "http://api-key-validator:8082"
+      jwt_secret: "${JWT_SECRET}"
+      token_cache_ttl: 300s
+    
+    redis:
+      address: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 0
+      pool_size: 20
+    
+    nats:
+      url: "nats://nats-client:4222"
+      username: "agba_user"
+      password: "${NATS_PASSWORD}"
+    
+    cors:
+      allowed_origins:
+        - "https://dashboard.agba.ai"
+        - "https://admin.agba.ai"
+        - "https://webrtc.agba.ai"
+      allowed_methods:
+        - "GET"
+        - "POST"
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Authorization"
+        - "Content-Type"
+        - "X-Requested-With"
+        - "X-Request-ID"
+      max_age: 86400
+    
+    services:
+      call_service: "http://call-service:8080"
+      agent_service: "http://agent-service:8080"
+      analytics_service: "http://analytics-service:8080"
+      webhook_service: "http://webhook-service:8080"
+      user_service: "http://user-service:8080"
+      config_service: "http://config-service:8080"
+      webrtc_service: "http://webrtc-service:8080"
+      biometrics_service: "http://biometrics-service:8080"
+      recording_service: "http://recording-service:8080"
+    
+    rate_limit:
+      enabled: true
+      default_rpm: 1000
+      default_rph: 10000
+      burst_multiplier: 2
+      cleanup_interval: 60s
+      redis_key_prefix: "rate_limit:"
+      sliding_window: true
+      block_duration: 300s
+    
+    monitoring:
+      enabled: true
+      metrics_path: "/metrics"
+      request_logging: true
+      slow_request_threshold: 1s
+
+---
+# API Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: agba-system
+  labels:
+    app: api-gateway
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: agba/api-gateway:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: AGBA_GATEWAY_ENVIRONMENT
+          value: "production"
+        - name: AGBA_GATEWAY_SERVER_PORT
+          value: "8080"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: oauth2-secrets
+              key: jwt-secret
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth
+              key: agba-password
+        volumeMounts:
+        - name: config
+          mountPath: /etc/api-gateway
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: api-gateway-config
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+# API Gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: agba-system
+  labels:
+    app: api-gateway
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: api-gateway
+
+---
+# API Gateway HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# API Gateway PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway-pdb
+  namespace: agba-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+
+---
+# API Gateway Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  namespace: agba-system
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://dashboard.agba.ai,https://admin.agba.ai,https://webrtc.agba.ai"
+spec:
+  tls:
+  - hosts:
+    - api.agba.ai
+    secretName: api-gateway-tls
+  rules:
+  - host: api.agba.ai
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 8080
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-gateway
+  namespace: agba-system
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for API Gateway Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-gateway-alerts
+  namespace: agba-system
+  labels:
+    app: api-gateway
+spec:
+  groups:
+  - name: api-gateway
+    rules:
+    - alert: APIGatewayDown
+      expr: up{job="api-gateway"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: API Gateway is down
+        description: "API Gateway instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: APIGatewayHighLatency
+      expr: histogram_quantile(0.95, rate(agba_gateway_request_duration_seconds_bucket[5m])) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: API Gateway high latency
+        description: "API Gateway 95th percentile latency is above 1s\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: APIGatewayHighErrorRate
+      expr: rate(agba_gateway_requests_total{status=~"5.."}[5m]) / rate(agba_gateway_requests_total[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: API Gateway high error rate
+        description: "API Gateway error rate is above 5%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: APIGatewayRateLimitHigh
+      expr: rate(agba_gateway_rate_limit_hits_total[5m]) > 10
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: API Gateway high rate limit hits
+        description: "API Gateway is experiencing high rate limit hits\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: APIGatewayMemoryHigh
+      expr: container_memory_usage_bytes{pod=~"api-gateway-.*"} / container_spec_memory_limit_bytes > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: API Gateway high memory usage
+        description: "API Gateway memory usage is above 80%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# Network Policy for API Gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-netpol
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from nginx ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow egress to all backend services
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+    - protocol: TCP
+      port: 8082
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow egress to NATS
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow egress to PostgreSQL via PgBouncer
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
