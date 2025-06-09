@@ -1,0 +1,197 @@
+# PgBouncer Configuration for Connection Pooling
+# Provides connection pooling for PostgreSQL cluster
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-config
+  namespace: agba-data
+data:
+  pgbouncer.ini: |
+    [databases]
+    agba_core = host=postgresql-master port=5432 dbname=agba_core
+    agba_analytics = host=postgresql-master port=5432 dbname=agba_analytics
+    agba_recordings = host=postgresql-master port=5432 dbname=agba_recordings
+    agba_biometrics = host=postgresql-master port=5432 dbname=agba_biometrics
+    
+    ; Read-only databases pointing to slaves
+    agba_core_ro = host=postgresql-slave port=5432 dbname=agba_core
+    agba_analytics_ro = host=postgresql-slave port=5432 dbname=agba_analytics
+    
+    [pgbouncer]
+    ; Connection settings
+    listen_addr = 0.0.0.0
+    listen_port = 5432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    
+    ; Pool settings
+    pool_mode = transaction
+    max_client_conn = 1000
+    default_pool_size = 25
+    min_pool_size = 5
+    reserve_pool_size = 5
+    reserve_pool_timeout = 5
+    max_db_connections = 50
+    max_user_connections = 50
+    
+    ; Timeouts
+    server_reset_query = DISCARD ALL
+    server_check_delay = 30
+    server_check_query = select 1
+    server_lifetime = 3600
+    server_idle_timeout = 600
+    
+    ; Logging
+    log_connections = 1
+    log_disconnections = 1
+    log_pooler_errors = 1
+    
+    ; Admin settings
+    admin_users = pgbouncer_admin
+    stats_users = pgbouncer_stats
+    
+    ; Security
+    ignore_startup_parameters = extra_float_digits
+    
+  userlist.txt: |
+    "agba_user" "md5a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p"
+    "pgbouncer_admin" "md5b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q"
+    "pgbouncer_stats" "md5c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r"
+
+---
+# PgBouncer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: agba-data
+  labels:
+    app: pgbouncer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pgbouncer
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+    spec:
+      containers:
+      - name: pgbouncer
+        image: pgbouncer/pgbouncer:1.21.0
+        ports:
+        - containerPort: 5432
+          name: pgbouncer
+        env:
+        - name: DATABASES_HOST
+          value: "postgresql-master"
+        - name: DATABASES_PORT
+          value: "5432"
+        - name: DATABASES_USER
+          value: "agba_user"
+        - name: DATABASES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: POOL_MODE
+          value: "transaction"
+        - name: MAX_CLIENT_CONN
+          value: "1000"
+        - name: DEFAULT_POOL_SIZE
+          value: "25"
+        volumeMounts:
+        - name: pgbouncer-config
+          mountPath: /etc/pgbouncer/pgbouncer.ini
+          subPath: pgbouncer.ini
+        - name: pgbouncer-config
+          mountPath: /etc/pgbouncer/userlist.txt
+          subPath: userlist.txt
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          tcpSocket:
+            port: 5432
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 5432
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: pgbouncer-config
+        configMap:
+          name: pgbouncer-config
+
+---
+# PgBouncer Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: agba-data
+  labels:
+    app: pgbouncer
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: pgbouncer
+  selector:
+    app: pgbouncer
+  type: ClusterIP
+
+---
+# PgBouncer Read-Only Service (for read replicas)
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer-ro
+  namespace: agba-data
+  labels:
+    app: pgbouncer
+    type: readonly
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: pgbouncer
+  selector:
+    app: pgbouncer
+  type: ClusterIP
+
+---
+# PgBouncer HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pgbouncer-hpa
+  namespace: agba-data
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pgbouncer
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
