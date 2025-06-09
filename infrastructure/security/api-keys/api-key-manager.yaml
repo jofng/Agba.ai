@@ -1,0 +1,490 @@
+# API Key Management System for Agba Voice AI Platform
+# Centralized API key generation, validation, and management
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-key-manager-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    # API Key Manager Configuration
+    server:
+      host: "0.0.0.0"
+      port: 8081
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+      
+    # Database Configuration
+    database:
+      driver: "postgres"
+      dsn: "postgresql://agba_user:${POSTGRES_PASSWORD}@pgbouncer:5432/agba_core?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300s
+      
+    # Redis Configuration for Caching
+    redis:
+      addr: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 2
+      pool_size: 10
+      min_idle_conns: 5
+      key_ttl: 3600s # 1 hour cache
+      
+    # API Key Configuration
+    api_keys:
+      default_ttl: 8760h # 1 year
+      max_ttl: 17520h    # 2 years
+      min_ttl: 24h       # 1 day
+      key_length: 32
+      prefix: "agba_"
+      
+    # Rate Limiting per API Key
+    rate_limiting:
+      default_requests_per_minute: 1000
+      default_requests_per_hour: 10000
+      default_requests_per_day: 100000
+      burst_multiplier: 2
+      
+    # Scopes and Permissions
+    scopes:
+      - name: "calls:read"
+        description: "Read call information"
+      - name: "calls:write"
+        description: "Create and manage calls"
+      - name: "calls:delete"
+        description: "Delete calls"
+      - name: "agents:read"
+        description: "Read agent configurations"
+      - name: "agents:write"
+        description: "Create and modify agents"
+      - name: "agents:delete"
+        description: "Delete agents"
+      - name: "analytics:read"
+        description: "Access analytics data"
+      - name: "recordings:read"
+        description: "Access call recordings"
+      - name: "recordings:delete"
+        description: "Delete call recordings"
+      - name: "webhooks:manage"
+        description: "Manage webhook configurations"
+      - name: "admin:read"
+        description: "Administrative read access"
+      - name: "admin:write"
+        description: "Administrative write access"
+      
+    # Logging
+    logging:
+      level: "info"
+      format: "json"
+      
+    # Security
+    security:
+      encryption_key: "${ENCRYPTION_KEY}"
+      hash_algorithm: "sha256"
+      require_https: true
+      
+    # Monitoring
+    monitoring:
+      metrics_enabled: true
+      metrics_path: "/metrics"
+      health_check_path: "/health"
+
+---
+# API Key Manager Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-key-manager
+  namespace: agba-system
+  labels:
+    app: api-key-manager
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-key-manager
+  template:
+    metadata:
+      labels:
+        app: api-key-manager
+    spec:
+      containers:
+      - name: api-key-manager
+        image: agba/api-key-manager:latest
+        ports:
+        - containerPort: 8081
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-key-secrets
+              key: encryption-key
+        volumeMounts:
+        - name: config
+          mountPath: /etc/api-key-manager
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: api-key-manager-config
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+
+---
+# API Key Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-key-manager
+  namespace: agba-system
+  labels:
+    app: api-key-manager
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  ports:
+  - port: 8081
+    targetPort: 8081
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-key-manager
+
+---
+# API Key Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-key-secrets
+  namespace: agba-system
+type: Opaque
+data:
+  encryption-key: YWdiYS1hcGkta2V5LWVuY3J5cHRpb24ta2V5LTIwMjU= # agba-api-key-encryption-key-2025 (base64)
+
+---
+# API Key Validator Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-key-validator-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    # API Key Validator Configuration
+    server:
+      host: "0.0.0.0"
+      port: 8082
+      read_timeout: 10s
+      write_timeout: 10s
+      idle_timeout: 60s
+      
+    # Redis Configuration for Fast Validation
+    redis:
+      addr: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 2
+      pool_size: 20
+      min_idle_conns: 10
+      
+    # Validation Configuration
+    validation:
+      cache_ttl: 300s # 5 minutes
+      negative_cache_ttl: 60s # 1 minute
+      batch_size: 100
+      
+    # Rate Limiting Enforcement
+    rate_limiting:
+      enabled: true
+      sliding_window: true
+      cleanup_interval: 60s
+      
+    # Logging
+    logging:
+      level: "info"
+      format: "json"
+      access_log: true
+
+---
+# API Key Validator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-key-validator
+  namespace: agba-system
+  labels:
+    app: api-key-validator
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-key-validator
+  template:
+    metadata:
+      labels:
+        app: api-key-validator
+    spec:
+      containers:
+      - name: api-key-validator
+        image: agba/api-key-validator:latest
+        ports:
+        - containerPort: 8082
+          name: http
+        - containerPort: 9091
+          name: metrics
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        volumeMounts:
+        - name: config
+          mountPath: /etc/api-key-validator
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: api-key-validator-config
+
+---
+# API Key Validator Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-key-validator
+  namespace: agba-system
+  labels:
+    app: api-key-validator
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+spec:
+  ports:
+  - port: 8082
+    targetPort: 8082
+    name: http
+  - port: 9091
+    targetPort: 9091
+    name: metrics
+  selector:
+    app: api-key-validator
+
+---
+# API Key Database Schema Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: api-key-schema-setup
+  namespace: agba-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: schema-setup
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h pgbouncer -p 5432 -U agba_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 5
+          done
+          
+          # Create API key tables
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h pgbouncer -U agba_user -d agba_core << 'EOF'
+          
+          -- API Keys table
+          CREATE TABLE IF NOT EXISTS api_keys (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            key_hash VARCHAR(64) UNIQUE NOT NULL,
+            key_prefix VARCHAR(10) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            organization_id UUID NOT NULL,
+            user_id UUID,
+            scopes TEXT[] NOT NULL DEFAULT '{}',
+            rate_limit_rpm INTEGER DEFAULT 1000,
+            rate_limit_rph INTEGER DEFAULT 10000,
+            rate_limit_rpd INTEGER DEFAULT 100000,
+            is_active BOOLEAN DEFAULT true,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- API Key Usage table
+          CREATE TABLE IF NOT EXISTS api_key_usage (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            api_key_id UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+            endpoint VARCHAR(255) NOT NULL,
+            method VARCHAR(10) NOT NULL,
+            status_code INTEGER NOT NULL,
+            response_time_ms INTEGER,
+            request_size_bytes INTEGER,
+            response_size_bytes INTEGER,
+            ip_address INET,
+            user_agent TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Indexes for performance
+          CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+          CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(organization_id);
+          CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active);
+          CREATE INDEX IF NOT EXISTS idx_api_keys_expires ON api_keys(expires_at);
+          CREATE INDEX IF NOT EXISTS idx_api_key_usage_key_id ON api_key_usage(api_key_id);
+          CREATE INDEX IF NOT EXISTS idx_api_key_usage_created ON api_key_usage(created_at);
+          
+          -- Partitioning for usage table (by month)
+          CREATE TABLE IF NOT EXISTS api_key_usage_y2025m06 PARTITION OF api_key_usage
+          FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+          
+          EOF
+          
+          echo "API key schema setup completed"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+      restartPolicy: OnFailure
+
+---
+# API Key Manager HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-key-manager-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-key-manager
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# API Key Validator HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-key-validator-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-key-validator
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# ServiceMonitor for API Key Services
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-key-services
+  namespace: agba-system
+  labels:
+    app: api-key-services
+spec:
+  selector:
+    matchLabels:
+      app: api-key-manager
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-key-validator-monitor
+  namespace: agba-system
+  labels:
+    app: api-key-validator
+spec:
+  selector:
+    matchLabels:
+      app: api-key-validator
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

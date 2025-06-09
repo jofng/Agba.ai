@@ -1,0 +1,991 @@
+# Recording Service Deployment for Agba Voice AI Platform
+# Comprehensive call recording, audio storage, and transcription service
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: recording-service-config
+  namespace: agba-system
+data:
+  config.yaml: |
+    environment: production
+    version: "1.0.0"
+    
+    server:
+      port: 8080
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+    
+    database:
+      driver: postgres
+      dsn: "postgresql://agba_user:${POSTGRES_PASSWORD}@pgbouncer:5432/agba_core?sslmode=require"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300s
+    
+    redis:
+      address: "redis-master:6379"
+      password: "${REDIS_PASSWORD}"
+      db: 5
+      pool_size: 10
+    
+    nats:
+      url: "nats://nats-client:4222"
+      username: "agba_user"
+      password: "${NATS_PASSWORD}"
+    
+    storage:
+      default_provider: "file"
+      file:
+        enabled: true
+        base_path: "/app/recordings"
+        temp_path: "/app/temp"
+        chunk_size: 1048576
+      s3:
+        enabled: false
+        region: "${AWS_REGION}"
+        bucket: "${S3_BUCKET}"
+        access_key_id: "${AWS_ACCESS_KEY_ID}"
+        secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+        use_ssl: true
+      gcs:
+        enabled: false
+        project_id: "${GCS_PROJECT_ID}"
+        bucket: "${GCS_BUCKET}"
+        credentials_file: "/etc/gcs/credentials.json"
+      max_file_size: 1073741824
+      allowed_formats: ["wav", "mp3", "flac", "ogg", "m4a"]
+      retention_period: 2160h
+      archive_period: 8760h
+      compression_level: 6
+      enable_encryption: true
+      encryption_key: "${ENCRYPTION_KEY}"
+    
+    audio:
+      default_format: "wav"
+      default_sample_rate: 16000
+      default_channels: 1
+      default_bit_depth: 16
+      enable_normalization: true
+      normalization_level: -23.0
+      enable_noise_reduction: true
+      noise_reduction_level: 0.5
+      chunk_duration: 30s
+      overlap_duration: 1s
+      max_processing_time: 300s
+      buffer_size: 4096
+      latency_target: 100ms
+      enable_realtime: true
+    
+    transcription:
+      enabled: true
+      provider: "whisper"
+      whisper:
+        model_path: "/app/models/whisper"
+        model_size: "base"
+        temperature: 0.0
+        beam_size: 5
+        best_of: 5
+        use_gpu: false
+      language: "en-US"
+      enable_punctuation: true
+      enable_diarization: true
+      max_speakers: 10
+      timeout: 300s
+      retry_attempts: 3
+      retry_delay: 30s
+    
+    compression:
+      enabled: true
+      algorithm: "opus"
+      quality: 6
+      bitrate: 64000
+      enable_vbr: true
+      complexity_level: 10
+    
+    processing:
+      queue_size: 1000
+      worker_count: 5
+      batch_size: 10
+      process_interval: 10s
+      max_retries: 3
+      retry_delay: 60s
+      retry_backoff: "exponential"
+      retry_max_delay: 3600s
+      cleanup_interval: 1h
+      temp_file_retention: 24h
+      failed_job_retention: 168h
+      max_concurrent_uploads: 10
+      max_concurrent_downloads: 20
+      max_concurrent_processing: 5
+      max_memory_usage: 2147483648
+      buffer_pool_size: 100
+    
+    security:
+      encryption_algorithm: "AES-256-GCM"
+      key_rotation_period: 2160h
+      enable_access_control: true
+      allowed_origins: ["*"]
+      allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+      allowed_headers: ["*"]
+      require_authentication: true
+      jwt_secret: "${JWT_SECRET}"
+      api_key_header: "X-API-Key"
+      enable_rate_limit: true
+      rate_limit: 100
+      rate_limit_window: 1m
+      burst_limit: 20
+      enable_file_validation: true
+      max_file_size: 1073741824
+      allowed_mime_types: ["audio/wav", "audio/mpeg", "audio/flac", "audio/ogg"]
+      scan_for_malware: true
+    
+    compliance:
+      enable_data_retention: true
+      default_retention_period: 2160h
+      max_retention_period: 26280h
+      enable_audit_logging: true
+      audit_log_level: "INFO"
+      audit_log_retention: 26280h
+      enable_data_anonymization: false
+      anonymization_delay: 720h
+      enable_gdpr: true
+      enable_hipaa: false
+      enable_soc2: true
+      enable_pci: false
+      enable_data_export: true
+      export_format: "json"
+      export_retention: 168h
+      max_export_size: 10737418240
+    
+    monitoring:
+      enabled: true
+      metrics_path: "/metrics"
+      request_logging: true
+      slow_request_threshold: 1s
+      enable_performance_monitoring: true
+      performance_metrics_interval: 30s
+      health_check_interval: 30s
+      health_check_timeout: 5s
+      enable_alerting: true
+      alerting_interval: 60s
+      error_rate_threshold: 0.05
+      latency_threshold: 5s
+      storage_threshold: 0.85
+
+---
+# Recording Service Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: recording-secrets
+  namespace: agba-system
+type: Opaque
+data:
+  encryption-key: eW91ci1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcw== # base64 encoded your-encryption-key-32-bytes
+  jwt-secret: eW91ci1qd3Qtc2VjcmV0LWtleQ== # base64 encoded your-jwt-secret-key
+  aws-access-key-id: eW91ci1hd3MtYWNjZXNzLWtleS1pZA== # base64 encoded your-aws-access-key-id
+  aws-secret-access-key: eW91ci1hd3Mtc2VjcmV0LWFjY2Vzcy1rZXk= # base64 encoded your-aws-secret-access-key
+  aws-region: dXMtZWFzdC0x # base64 encoded us-east-1
+  s3-bucket: YWdiYS1yZWNvcmRpbmdzLWJ1Y2tldA== # base64 encoded agba-recordings-bucket
+  gcs-project-id: eW91ci1nY3MtcHJvamVjdC1pZA== # base64 encoded your-gcs-project-id
+  gcs-bucket: YWdiYS1yZWNvcmRpbmdzLWdjcw== # base64 encoded agba-recordings-gcs
+
+---
+# GCS Credentials Secret (if using Google Cloud Storage)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gcs-credentials
+  namespace: agba-system
+type: Opaque
+data:
+  credentials.json: ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAieW91ci1nY3MtcHJvamVjdC1pZCIsCiAgInByaXZhdGVfa2V5X2lkIjogInlvdXIta2V5LWlkIiwKICAicHJpdmF0ZV9rZXkiOiAiLS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tXG55b3VyLXByaXZhdGUta2V5XG4tLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tXG4iLAogICJjbGllbnRfZW1haWwiOiAieW91ci1zZXJ2aWNlLWFjY291bnRAeW91ci1wcm9qZWN0LmlhbS5nc2VydmljZWFjY291bnQuY29tIiwKICAiY2xpZW50X2lkIjogInlvdXItY2xpZW50LWlkIiwKICAiYXV0aF91cmkiOiAiaHR0cHM6Ly9hY2NvdW50cy5nb29nbGUuY29tL28vb2F1dGgyL2F1dGgiLAogICJ0b2tlbl91cmkiOiAiaHR0cHM6Ly9vYXV0aDIuZ29vZ2xlYXBpcy5jb20vdG9rZW4iLAogICJhdXRoX3Byb3ZpZGVyX3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwKICAiY2xpZW50X3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vcm9ib3QvdjEvbWV0YWRhdGEveDUwOS95b3VyLXNlcnZpY2UtYWNjb3VudCU0MHlvdXItcHJvamVjdC5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSIKfQ== # base64 encoded GCS service account JSON
+
+---
+# Recording Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recording-service
+  namespace: agba-system
+  labels:
+    app: recording-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: recording-service
+  template:
+    metadata:
+      labels:
+        app: recording-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: recording-service
+        image: agba/recording-service:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: AGBA_RECORDING_ENVIRONMENT
+          value: "production"
+        - name: AGBA_RECORDING_SERVER_PORT
+          value: "8080"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        - name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth
+              key: agba-password
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: encryption-key
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: jwt-secret
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: aws-access-key-id
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: aws-secret-access-key
+              optional: true
+        - name: AWS_REGION
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: aws-region
+              optional: true
+        - name: S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: s3-bucket
+              optional: true
+        - name: GCS_PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: gcs-project-id
+              optional: true
+        - name: GCS_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: recording-secrets
+              key: gcs-bucket
+              optional: true
+        volumeMounts:
+        - name: config
+          mountPath: /etc/recording-service
+        - name: tls-certs
+          mountPath: /etc/ssl/certs
+        - name: recordings-storage
+          mountPath: /app/recordings
+        - name: temp-storage
+          mountPath: /app/temp
+        - name: models
+          mountPath: /app/models
+        - name: gcs-credentials
+          mountPath: /etc/gcs
+          readOnly: true
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: recording-service-config
+      - name: tls-certs
+        secret:
+          secretName: internal-services-tls
+      - name: recordings-storage
+        persistentVolumeClaim:
+          claimName: recordings-storage
+      - name: temp-storage
+        persistentVolumeClaim:
+          claimName: temp-storage
+      - name: models
+        persistentVolumeClaim:
+          claimName: ai-models
+      - name: gcs-credentials
+        secret:
+          secretName: gcs-credentials
+          optional: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+---
+# PersistentVolumeClaim for recordings storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recordings-storage
+  namespace: agba-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: fast-ssd
+
+---
+# PersistentVolumeClaim for temporary storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: temp-storage
+  namespace: agba-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: fast-ssd
+
+---
+# PersistentVolumeClaim for AI models
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-models
+  namespace: agba-system
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: fast-ssd
+
+---
+# Recording Service Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: recording-service
+  namespace: agba-system
+  labels:
+    app: recording-service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: recording-service
+
+---
+# Recording Service HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: recording-service-hpa
+  namespace: agba-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recording-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: recording_queue_size
+      target:
+        type: AverageValue
+        averageValue: "100"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# Recording Service PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: recording-service-pdb
+  namespace: agba-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: recording-service
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: recording-service
+  namespace: agba-system
+  labels:
+    app: recording-service
+spec:
+  selector:
+    matchLabels:
+      app: recording-service
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
+---
+# PrometheusRule for Recording Service Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: recording-service-alerts
+  namespace: agba-system
+  labels:
+    app: recording-service
+spec:
+  groups:
+  - name: recording-service
+    rules:
+    - alert: RecordingServiceDown
+      expr: up{job="recording-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: Recording Service is down
+        description: "Recording Service instance is down\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RecordingServiceHighLatency
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="recording-service"}[5m])) > 5
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Recording Service high latency
+        description: "Recording Service 95th percentile latency is above 5s\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RecordingServiceHighErrorRate
+      expr: rate(http_requests_total{job="recording-service",status=~"5.."}[5m]) / rate(http_requests_total{job="recording-service"}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Recording Service high error rate
+        description: "Recording Service error rate is above 5%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RecordingQueueHigh
+      expr: recording_queue_size > 500
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Recording queue size is high
+        description: "Recording queue size is above 500\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RecordingStorageHigh
+      expr: recording_storage_usage_percent > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Recording storage usage is high
+        description: "Recording storage usage is above 85%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: RecordingProcessingFailureRateHigh
+      expr: rate(recording_processing_failed_total[5m]) / rate(recording_processing_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: High recording processing failure rate
+        description: "Recording processing failure rate is above 10%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+    - alert: TranscriptionServiceDown
+      expr: transcription_service_health == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: Transcription service is down
+        description: "Transcription service health check failed\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+---
+# Recording Database Schema Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: recording-service-schema-setup
+  namespace: agba-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: schema-setup
+        image: postgres:15-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for PostgreSQL to be ready
+          until pg_isready -h pgbouncer -p 5432 -U agba_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 5
+          done
+          
+          # Create recording tables
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h pgbouncer -U agba_user -d agba_core << 'EOF'
+          
+          -- Recording enums
+          CREATE TYPE recording_status AS ENUM ('pending', 'recording', 'processing', 'completed', 'failed', 'archived', 'deleted', 'paused', 'stopped');
+          CREATE TYPE recording_type AS ENUM ('call', 'conference', 'voicemail', 'upload', 'stream');
+          CREATE TYPE audio_format AS ENUM ('wav', 'mp3', 'flac', 'ogg', 'm4a', 'opus', 'aac');
+          CREATE TYPE storage_provider AS ENUM ('file', 's3', 'gcs');
+          CREATE TYPE processing_status AS ENUM ('pending', 'in_progress', 'completed', 'failed', 'cancelled');
+          
+          -- Recordings table
+          CREATE TABLE IF NOT EXISTS recordings (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            session_id UUID,
+            call_id UUID,
+            user_id UUID,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            type recording_type NOT NULL,
+            status recording_status NOT NULL DEFAULT 'pending',
+            format audio_format NOT NULL DEFAULT 'wav',
+            sample_rate INTEGER DEFAULT 16000,
+            channels INTEGER DEFAULT 1,
+            bit_depth INTEGER DEFAULT 16,
+            duration INTERVAL DEFAULT '0 seconds',
+            file_size BIGINT DEFAULT 0,
+            storage_provider storage_provider NOT NULL DEFAULT 'file',
+            storage_path VARCHAR(1000) NOT NULL,
+            storage_bucket VARCHAR(255),
+            storage_region VARCHAR(100),
+            is_encrypted BOOLEAN DEFAULT TRUE,
+            encryption_key VARCHAR(255),
+            encryption_iv VARCHAR(255),
+            processing_status processing_status DEFAULT 'pending',
+            processing_started_at TIMESTAMP WITH TIME ZONE,
+            processing_completed_at TIMESTAMP WITH TIME ZONE,
+            processing_error TEXT,
+            has_transcription BOOLEAN DEFAULT FALSE,
+            transcription_id UUID,
+            quality_score DECIMAL(3,2),
+            noise_level DECIMAL(3,2),
+            silence_ratio DECIMAL(3,2),
+            participants JSONB DEFAULT '[]',
+            started_at TIMESTAMP WITH TIME ZONE,
+            ended_at TIMESTAMP WITH TIME ZONE,
+            retention_period INTERVAL DEFAULT '2160 hours',
+            expires_at TIMESTAMP WITH TIME ZONE,
+            is_archived BOOLEAN DEFAULT FALSE,
+            archived_at TIMESTAMP WITH TIME ZONE,
+            tags TEXT[] DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Recording sessions table
+          CREATE TABLE IF NOT EXISTS recording_sessions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            status recording_status NOT NULL DEFAULT 'pending',
+            auto_start BOOLEAN DEFAULT FALSE,
+            auto_stop BOOLEAN DEFAULT FALSE,
+            max_duration INTERVAL,
+            format audio_format NOT NULL DEFAULT 'wav',
+            sample_rate INTEGER DEFAULT 16000,
+            channels INTEGER DEFAULT 1,
+            bit_depth INTEGER DEFAULT 16,
+            storage_provider storage_provider NOT NULL DEFAULT 'file',
+            storage_path VARCHAR(1000),
+            enable_transcription BOOLEAN DEFAULT FALSE,
+            enable_compression BOOLEAN DEFAULT FALSE,
+            enable_noise_reduction BOOLEAN DEFAULT FALSE,
+            participants JSONB DEFAULT '[]',
+            started_at TIMESTAMP WITH TIME ZONE,
+            ended_at TIMESTAMP WITH TIME ZONE,
+            tags TEXT[] DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Transcriptions table
+          CREATE TABLE IF NOT EXISTS transcriptions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            recording_id UUID NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            segments JSONB DEFAULT '[]',
+            provider VARCHAR(100) NOT NULL,
+            language VARCHAR(10) DEFAULT 'en-US',
+            confidence DECIMAL(3,2),
+            has_diarization BOOLEAN DEFAULT FALSE,
+            speaker_count INTEGER DEFAULT 0,
+            status processing_status DEFAULT 'pending',
+            started_at TIMESTAMP WITH TIME ZONE,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            error TEXT,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Recording metadata table
+          CREATE TABLE IF NOT EXISTS recording_metadata (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            recording_id UUID NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+            key VARCHAR(255) NOT NULL,
+            value TEXT NOT NULL,
+            type VARCHAR(50) DEFAULT 'string',
+            category VARCHAR(100),
+            tags TEXT[] DEFAULT '{}',
+            created_by UUID NOT NULL,
+            updated_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE(recording_id, key)
+          );
+          
+          -- Batch jobs table
+          CREATE TABLE IF NOT EXISTS recording_batch_jobs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            type VARCHAR(100) NOT NULL,
+            status processing_status DEFAULT 'pending',
+            parameters JSONB DEFAULT '{}',
+            recording_ids UUID[] DEFAULT '{}',
+            total_items INTEGER DEFAULT 0,
+            processed_items INTEGER DEFAULT 0,
+            failed_items INTEGER DEFAULT 0,
+            progress DECIMAL(5,2) DEFAULT 0.0,
+            started_at TIMESTAMP WITH TIME ZONE,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            estimated_completion TIMESTAMP WITH TIME ZONE,
+            results JSONB DEFAULT '{}',
+            errors TEXT[] DEFAULT '{}',
+            created_by UUID NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Recording audit logs table
+          CREATE TABLE IF NOT EXISTS recording_audit_logs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            recording_id UUID,
+            session_id UUID,
+            action VARCHAR(100) NOT NULL,
+            actor UUID NOT NULL,
+            actor_type VARCHAR(50) DEFAULT 'user',
+            ip_address INET,
+            user_agent TEXT,
+            old_values JSONB,
+            new_values JSONB,
+            context JSONB DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          );
+          
+          -- Indexes for performance
+          CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
+          CREATE INDEX IF NOT EXISTS idx_recordings_type ON recordings(type);
+          CREATE INDEX IF NOT EXISTS idx_recordings_session_id ON recordings(session_id);
+          CREATE INDEX IF NOT EXISTS idx_recordings_call_id ON recordings(call_id);
+          CREATE INDEX IF NOT EXISTS idx_recordings_user_id ON recordings(user_id);
+          CREATE INDEX IF NOT EXISTS idx_recordings_created_at ON recordings(created_at);
+          CREATE INDEX IF NOT EXISTS idx_recordings_expires_at ON recordings(expires_at);
+          CREATE INDEX IF NOT EXISTS idx_recordings_storage_provider ON recordings(storage_provider);
+          CREATE INDEX IF NOT EXISTS idx_recordings_processing_status ON recordings(processing_status);
+          
+          CREATE INDEX IF NOT EXISTS idx_sessions_status ON recording_sessions(status);
+          CREATE INDEX IF NOT EXISTS idx_sessions_created_by ON recording_sessions(created_by);
+          CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON recording_sessions(created_at);
+          
+          CREATE INDEX IF NOT EXISTS idx_transcriptions_recording_id ON transcriptions(recording_id);
+          CREATE INDEX IF NOT EXISTS idx_transcriptions_status ON transcriptions(status);
+          CREATE INDEX IF NOT EXISTS idx_transcriptions_provider ON transcriptions(provider);
+          CREATE INDEX IF NOT EXISTS idx_transcriptions_language ON transcriptions(language);
+          
+          CREATE INDEX IF NOT EXISTS idx_metadata_recording_id ON recording_metadata(recording_id);
+          CREATE INDEX IF NOT EXISTS idx_metadata_key ON recording_metadata(key);
+          CREATE INDEX IF NOT EXISTS idx_metadata_category ON recording_metadata(category);
+          
+          CREATE INDEX IF NOT EXISTS idx_batch_jobs_type ON recording_batch_jobs(type);
+          CREATE INDEX IF NOT EXISTS idx_batch_jobs_status ON recording_batch_jobs(status);
+          CREATE INDEX IF NOT EXISTS idx_batch_jobs_created_by ON recording_batch_jobs(created_by);
+          
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_recording_id ON recording_audit_logs(recording_id);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_session_id ON recording_audit_logs(session_id);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON recording_audit_logs(action);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON recording_audit_logs(actor);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON recording_audit_logs(timestamp);
+          
+          -- Full-text search indexes
+          CREATE INDEX IF NOT EXISTS idx_recordings_text_search ON recordings USING gin(to_tsvector('english', name || ' ' || COALESCE(description, '')));
+          CREATE INDEX IF NOT EXISTS idx_transcriptions_text_search ON transcriptions USING gin(to_tsvector('english', text));
+          
+          -- Partitioning for recordings (by month)
+          CREATE TABLE IF NOT EXISTS recordings_y2025m06 PARTITION OF recordings
+          FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+          
+          -- Partitioning for audit logs (by month)
+          CREATE TABLE IF NOT EXISTS recording_audit_logs_y2025m06 PARTITION OF recording_audit_logs
+          FOR VALUES FROM ('2025-06-01') TO ('2025-07-01');
+          
+          -- Functions for automatic cleanup
+          CREATE OR REPLACE FUNCTION cleanup_old_recordings()
+          RETURNS void AS $$
+          BEGIN
+            -- Archive old recordings
+            UPDATE recordings SET is_archived = TRUE, archived_at = NOW()
+            WHERE expires_at < NOW() AND NOT is_archived;
+            
+            -- Delete expired recordings
+            DELETE FROM recordings WHERE expires_at < NOW() - INTERVAL '30 days' AND is_archived;
+            
+            -- Clean up old audit logs
+            DELETE FROM recording_audit_logs WHERE timestamp < NOW() - INTERVAL '3 years';
+            
+            -- Clean up old batch jobs
+            DELETE FROM recording_batch_jobs WHERE created_at < NOW() - INTERVAL '30 days' AND status IN ('completed', 'failed', 'cancelled');
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Function for updating timestamps
+          CREATE OR REPLACE FUNCTION update_recording_updated_at()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Triggers for automatic updated_at
+          CREATE TRIGGER update_recordings_updated_at BEFORE UPDATE ON recordings
+            FOR EACH ROW EXECUTE FUNCTION update_recording_updated_at();
+          
+          CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON recording_sessions
+            FOR EACH ROW EXECUTE FUNCTION update_recording_updated_at();
+          
+          CREATE TRIGGER update_transcriptions_updated_at BEFORE UPDATE ON transcriptions
+            FOR EACH ROW EXECUTE FUNCTION update_recording_updated_at();
+          
+          CREATE TRIGGER update_metadata_updated_at BEFORE UPDATE ON recording_metadata
+            FOR EACH ROW EXECUTE FUNCTION update_recording_updated_at();
+          
+          CREATE TRIGGER update_batch_jobs_updated_at BEFORE UPDATE ON recording_batch_jobs
+            FOR EACH ROW EXECUTE FUNCTION update_recording_updated_at();
+          
+          -- Function for calculating recording duration
+          CREATE OR REPLACE FUNCTION calculate_recording_duration()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            IF NEW.ended_at IS NOT NULL AND NEW.started_at IS NOT NULL THEN
+              NEW.duration = NEW.ended_at - NEW.started_at;
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Trigger for automatic duration calculation
+          CREATE TRIGGER calculate_recordings_duration BEFORE INSERT OR UPDATE ON recordings
+            FOR EACH ROW EXECUTE FUNCTION calculate_recording_duration();
+          
+          -- Function for setting expiration date
+          CREATE OR REPLACE FUNCTION set_recording_expiration()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            IF NEW.expires_at IS NULL AND NEW.retention_period IS NOT NULL THEN
+              NEW.expires_at = NEW.created_at + NEW.retention_period;
+            END IF;
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql;
+          
+          -- Trigger for automatic expiration date setting
+          CREATE TRIGGER set_recordings_expiration BEFORE INSERT OR UPDATE ON recordings
+            FOR EACH ROW EXECUTE FUNCTION set_recording_expiration();
+          
+          EOF
+          
+          echo "Recording service schema setup completed"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+      restartPolicy: OnFailure
+
+---
+# Network Policy for Recording Service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: recording-service-netpol
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: recording-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from other services for recording operations
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow egress to PostgreSQL via PgBouncer
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow egress to NATS
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow HTTPS for external storage providers (S3, GCS)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80

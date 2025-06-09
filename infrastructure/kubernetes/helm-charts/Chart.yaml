@@ -1,0 +1,41 @@
+apiVersion: v2
+name: agba-platform
+description: Agba Voice AI Platform Helm Chart
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/ibilola104/Agba.ai
+sources:
+  - https://github.com/ibilola104/Agba.ai
+maintainers:
+  - name: Agba AI Team
+    email: team@agba.ai
+keywords:
+  - voice-ai
+  - telephony
+  - webrtc
+  - ai-ml
+  - microservices
+annotations:
+  category: AI/ML Platform
+dependencies:
+  - name: postgresql
+    version: "12.1.9"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "17.3.7"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: nats
+    version: "0.19.1"
+    repository: https://nats-io.github.io/k8s/helm/charts/
+    condition: nats.enabled
+  - name: prometheus
+    version: "15.18.0"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: monitoring.prometheus.enabled
+  - name: grafana
+    version: "6.50.7"
+    repository: https://grafana.github.io/helm-charts
+    condition: monitoring.grafana.enabled

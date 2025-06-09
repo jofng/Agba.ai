@@ -1,0 +1,677 @@
+# Network Security Policies for Agba Voice AI Platform
+# Kubernetes Network Policies and Security Controls
+
+# Default Deny All Policy for agba-system namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: agba-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# Default Deny All Policy for agba-data namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: agba-data
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# Default Deny All Policy for agba-telephony namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: agba-telephony
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# Allow DNS Resolution
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: agba-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: agba-data
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: agba-telephony
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+---
+# API Gateway Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from nginx ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  # Allow egress to all services in agba-system
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+    - protocol: TCP
+      port: 8082
+  # Allow egress to external APIs (HTTPS)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# OAuth2 Server Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oauth2-server-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: oauth2-server
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow ingress from nginx ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # Allow egress to PostgreSQL
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow egress to SMTP (email)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 587
+    - protocol: TCP
+      port: 465
+
+---
+# API Key Manager Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-key-manager-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: api-key-manager
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8081
+  egress:
+  # Allow egress to PostgreSQL
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-data
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# API Key Validator Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-key-validator-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: api-key-validator
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from API Gateway
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8082
+  # Allow ingress from all services that need validation
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    - namespaceSelector:
+        matchLabels:
+          name: agba-telephony
+    ports:
+    - protocol: TCP
+      port: 8082
+  egress:
+  # Allow egress to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# PostgreSQL Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgresql-policy
+  namespace: agba-data
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresql
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from PgBouncer
+  - from:
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow ingress from backup jobs
+  - from:
+    - podSelector:
+        matchLabels:
+          app: postgresql-backup
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress:
+  # Allow replication between PostgreSQL instances
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# PgBouncer Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pgbouncer-policy
+  namespace: agba-data
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from agba-system services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow ingress from agba-telephony services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-telephony
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress:
+  # Allow egress to PostgreSQL
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# Redis Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from agba-system services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow ingress from agba-telephony services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-telephony
+    ports:
+    - protocol: TCP
+      port: 6379
+  egress:
+  # Allow replication between Redis instances
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+
+---
+# Redis Sentinel Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-sentinel-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-sentinel
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from application services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    - namespaceSelector:
+        matchLabels:
+          name: agba-telephony
+    ports:
+    - protocol: TCP
+      port: 26379
+  egress:
+  # Allow egress to Redis instances
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow communication between sentinels
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis-sentinel
+    ports:
+    - protocol: TCP
+      port: 26379
+
+---
+# NATS Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-policy
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      app: nats
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress from agba-system services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-system
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow ingress from agba-telephony services
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-telephony
+    ports:
+    - protocol: TCP
+      port: 4222
+  # Allow monitoring
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8222
+  egress:
+  # Allow clustering between NATS instances
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 6222
+
+---
+# Monitoring Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: agba-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow ingress from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: 9091
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8222
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: agba-data
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow ingress from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9187
+    - protocol: TCP
+      port: 9121
+
+---
+# External Traffic Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-https
+  namespace: agba-system
+spec:
+  podSelector:
+    matchLabels:
+      external-access: "true"
+  policyTypes:
+  - Egress
+  egress:
+  # Allow HTTPS to external services
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  # Allow HTTP for health checks and webhooks
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+
+---
+# Pod Security Policy
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: agba-restricted
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'RunAsAny'
+  readOnlyRootFilesystem: false
+
+---
+# Security Context Constraints (OpenShift)
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: agba-scc
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegedContainer: false
+allowedCapabilities: null
+defaultAddCapabilities: null
+fsGroup:
+  type: RunAsAny
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+- KILL
+- MKNOD
+- SETUID
+- SETGID
+runAsUser:
+  type: MustRunAsNonRoot
+seLinuxContext:
+  type: MustRunAs
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret
+
+---
+# Network Security Monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-security-rules
+  namespace: agba-system
+data:
+  falco-rules.yaml: |
+    # Falco rules for network security monitoring
+    - rule: Unexpected Network Connection
+      desc: Detect unexpected network connections
+      condition: >
+        (inbound_outbound) and
+        (fd.sockfamily = ip) and
+        (not proc.name in (allowed_processes)) and
+        (not fd.cip in (allowed_ips))
+      output: >
+        Unexpected network connection
+        (user=%user.name command=%proc.cmdline connection=%fd.name)
+      priority: WARNING
+      
+    - rule: Sensitive File Access
+      desc: Detect access to sensitive files
+      condition: >
+        (open_read or open_write) and
+        (fd.name startswith /etc/ssl or
+         fd.name startswith /etc/pki or
+         fd.name contains password or
+         fd.name contains secret)
+      output: >
+        Sensitive file accessed
+        (user=%user.name command=%proc.cmdline file=%fd.name)
+      priority: WARNING

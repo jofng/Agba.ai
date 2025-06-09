@@ -1,0 +1,333 @@
+# PostgreSQL Cluster Configuration for Agba Voice AI Platform
+# High Availability setup with master-slave replication
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-config
+  namespace: agba-data
+data:
+  postgresql.conf: |
+    # Connection Settings
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 200
+    shared_preload_libraries = 'pg_stat_statements,pg_stat_monitor'
+    
+    # Memory Settings
+    shared_buffers = 256MB
+    effective_cache_size = 1GB
+    work_mem = 4MB
+    maintenance_work_mem = 64MB
+    
+    # WAL Settings for Replication
+    wal_level = replica
+    max_wal_senders = 3
+    max_replication_slots = 3
+    wal_keep_segments = 64
+    archive_mode = on
+    archive_command = 'cp %p /var/lib/postgresql/archive/%f'
+    
+    # Checkpoint Settings
+    checkpoint_completion_target = 0.9
+    wal_buffers = 16MB
+    checkpoint_segments = 32
+    
+    # Query Tuning
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+    
+    # Logging
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = 'pg_log'
+    log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+    log_statement = 'all'
+    log_duration = on
+    log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+    
+    # Performance Monitoring
+    track_activities = on
+    track_counts = on
+    track_io_timing = on
+    track_functions = all
+    
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    local   all             postgres                                peer
+    local   all             all                                     md5
+    host    all             all             127.0.0.1/32            md5
+    host    all             all             ::1/128                 md5
+    host    all             all             10.0.0.0/8              md5
+    host    replication     replicator      10.0.0.0/8              md5
+    host    all             all             0.0.0.0/0               md5
+
+---
+# PostgreSQL Master Deployment
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-master
+  namespace: agba-data
+  labels:
+    app: postgresql
+    role: master
+spec:
+  serviceName: postgresql-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+      role: master
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        role: master
+    spec:
+      containers:
+      - name: postgresql
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+          name: postgresql
+        env:
+        - name: POSTGRES_DB
+          value: "agba_core"
+        - name: POSTGRES_USER
+          value: "agba_user"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: POSTGRES_REPLICATION_USER
+          value: "replicator"
+        - name: POSTGRES_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: replication-password
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgresql-config
+          mountPath: /etc/postgresql/postgresql.conf
+          subPath: postgresql.conf
+        - name: postgresql-config
+          mountPath: /etc/postgresql/pg_hba.conf
+          subPath: pg_hba.conf
+        - name: postgresql-archive
+          mountPath: /var/lib/postgresql/archive
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 4000m
+            memory: 8Gi
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U agba_user -d agba_core
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U agba_user -d agba_core
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgresql-config
+        configMap:
+          name: postgresql-config
+      - name: postgresql-archive
+        persistentVolumeClaim:
+          claimName: postgresql-archive-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: postgresql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "gp3"
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+# PostgreSQL Slave Deployment
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-slave
+  namespace: agba-data
+  labels:
+    app: postgresql
+    role: slave
+spec:
+  serviceName: postgresql-slave
+  replicas: 2
+  selector:
+    matchLabels:
+      app: postgresql
+      role: slave
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        role: slave
+    spec:
+      initContainers:
+      - name: init-replica
+        image: postgres:15-alpine
+        command:
+        - /bin/bash
+        - -c
+        - |
+          if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+            pg_basebackup -h postgresql-master -D /var/lib/postgresql/data -U replicator -v -P -W
+            echo "standby_mode = 'on'" >> /var/lib/postgresql/data/recovery.conf
+            echo "primary_conninfo = 'host=postgresql-master port=5432 user=replicator'" >> /var/lib/postgresql/data/recovery.conf
+          fi
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: replication-password
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/postgresql/data
+      containers:
+      - name: postgresql
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+          name: postgresql
+        env:
+        - name: POSTGRES_USER
+          value: "agba_user"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: PGUSER
+          value: "agba_user"
+        volumeMounts:
+        - name: postgresql-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgresql-config
+          mountPath: /etc/postgresql/postgresql.conf
+          subPath: postgresql.conf
+        - name: postgresql-config
+          mountPath: /etc/postgresql/pg_hba.conf
+          subPath: pg_hba.conf
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U agba_user
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U agba_user
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgresql-config
+        configMap:
+          name: postgresql-config
+  volumeClaimTemplates:
+  - metadata:
+      name: postgresql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "gp3"
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+# PostgreSQL Master Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-master
+  namespace: agba-data
+  labels:
+    app: postgresql
+    role: master
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgresql
+  selector:
+    app: postgresql
+    role: master
+  type: ClusterIP
+
+---
+# PostgreSQL Slave Service (Read Replicas)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-slave
+  namespace: agba-data
+  labels:
+    app: postgresql
+    role: slave
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgresql
+  selector:
+    app: postgresql
+    role: slave
+  type: ClusterIP
+
+---
+# PostgreSQL Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-secret
+  namespace: agba-data
+type: Opaque
+data:
+  postgres-password: YWdiYS1wb3N0Z3Jlcy1wYXNzd29yZA== # agba-postgres-password (base64)
+  replication-password: YWdiYS1yZXBsaWNhdGlvbi1wYXNzd29yZA== # agba-replication-password (base64)
+
+---
+# Archive PVC for WAL files
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-archive-pvc
+  namespace: agba-data
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: "efs"
+  resources:
+    requests:
+      storage: 50Gi

@@ -1,0 +1,104 @@
+# Agba Voice AI Platform - Kubernetes Cluster Configuration
+# This file defines the cluster configuration for the Agba platform
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agba-cluster-config
+  namespace: agba-system
+data:
+  cluster.yaml: |
+    # Cluster Configuration
+    cluster:
+      name: agba-voice-ai-cluster
+      version: "1.28"
+      region: us-east-1
+      zones:
+        - us-east-1a
+        - us-east-1b
+        - us-east-1c
+      
+      # Node Groups
+      nodeGroups:
+        masters:
+          count: 3
+          instanceType: m5.xlarge
+          diskSize: 100
+          zones:
+            - us-east-1a
+            - us-east-1b
+            - us-east-1c
+        
+        workers:
+          count: 6
+          instanceType: m5.2xlarge
+          diskSize: 200
+          zones:
+            - us-east-1a
+            - us-east-1b
+            - us-east-1c
+          
+          # Autoscaling configuration
+          autoscaling:
+            enabled: true
+            minSize: 6
+            maxSize: 20
+            targetCPUUtilization: 70
+            targetMemoryUtilization: 80
+      
+      # Networking
+      networking:
+        serviceSubnet: "10.100.0.0/16"
+        podSubnet: "10.244.0.0/16"
+        cni: calico
+      
+      # Add-ons
+      addons:
+        - name: vpc-cni
+          version: latest
+        - name: coredns
+          version: latest
+        - name: kube-proxy
+          version: latest
+        - name: aws-load-balancer-controller
+          version: latest
+        - name: cluster-autoscaler
+          version: latest
+        - name: metrics-server
+          version: latest
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agba-system
+  labels:
+    name: agba-system
+    purpose: platform-infrastructure
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agba-services
+  labels:
+    name: agba-services
+    purpose: application-services
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agba-monitoring
+  labels:
+    name: agba-monitoring
+    purpose: monitoring-observability
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agba-data
+  labels:
+    name: agba-data
+    purpose: data-storage

@@ -1,0 +1,308 @@
+# PostgreSQL Backup and Recovery System
+# Automated backup with point-in-time recovery capabilities
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-scripts
+  namespace: agba-data
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Configuration
+    BACKUP_DIR="/backups"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_NAME="agba_backup_${TIMESTAMP}"
+    RETENTION_DAYS=30
+    
+    # Database connection
+    export PGHOST="postgresql-master"
+    export PGPORT="5432"
+    export PGUSER="agba_user"
+    export PGPASSWORD="${POSTGRES_PASSWORD}"
+    
+    echo "Starting backup at $(date)"
+    
+    # Create backup directory
+    mkdir -p "${BACKUP_DIR}/${BACKUP_NAME}"
+    
+    # Perform base backup
+    pg_basebackup -D "${BACKUP_DIR}/${BACKUP_NAME}" -Ft -z -P -v
+    
+    # Backup individual databases
+    for db in agba_core agba_analytics agba_recordings agba_biometrics; do
+        echo "Backing up database: $db"
+        pg_dump -d "$db" -f "${BACKUP_DIR}/${BACKUP_NAME}/${db}.sql" --verbose
+        gzip "${BACKUP_DIR}/${BACKUP_NAME}/${db}.sql"
+    done
+    
+    # Create backup manifest
+    cat > "${BACKUP_DIR}/${BACKUP_NAME}/manifest.json" << EOF
+    {
+      "backup_name": "${BACKUP_NAME}",
+      "timestamp": "${TIMESTAMP}",
+      "type": "full",
+      "databases": ["agba_core", "agba_analytics", "agba_recordings", "agba_biometrics"],
+      "size": "$(du -sh ${BACKUP_DIR}/${BACKUP_NAME} | cut -f1)"
+    }
+    EOF
+    
+    # Upload to S3 (if configured)
+    if [ -n "$AWS_S3_BUCKET" ]; then
+        echo "Uploading backup to S3..."
+        aws s3 sync "${BACKUP_DIR}/${BACKUP_NAME}" "s3://${AWS_S3_BUCKET}/backups/${BACKUP_NAME}/"
+    fi
+    
+    # Cleanup old backups
+    find "${BACKUP_DIR}" -type d -name "agba_backup_*" -mtime +${RETENTION_DAYS} -exec rm -rf {} \;
+    
+    echo "Backup completed successfully at $(date)"
+    
+  restore.sh: |
+    #!/bin/bash
+    set -e
+    
+    if [ $# -ne 1 ]; then
+        echo "Usage: $0 <backup_name>"
+        exit 1
+    fi
+    
+    BACKUP_NAME="$1"
+    BACKUP_DIR="/backups"
+    RESTORE_DIR="/tmp/restore"
+    
+    # Database connection
+    export PGHOST="postgresql-master"
+    export PGPORT="5432"
+    export PGUSER="agba_user"
+    export PGPASSWORD="${POSTGRES_PASSWORD}"
+    
+    echo "Starting restore from backup: ${BACKUP_NAME}"
+    
+    # Download from S3 if needed
+    if [ -n "$AWS_S3_BUCKET" ] && [ ! -d "${BACKUP_DIR}/${BACKUP_NAME}" ]; then
+        echo "Downloading backup from S3..."
+        aws s3 sync "s3://${AWS_S3_BUCKET}/backups/${BACKUP_NAME}/" "${BACKUP_DIR}/${BACKUP_NAME}/"
+    fi
+    
+    # Verify backup exists
+    if [ ! -d "${BACKUP_DIR}/${BACKUP_NAME}" ]; then
+        echo "Backup not found: ${BACKUP_NAME}"
+        exit 1
+    fi
+    
+    # Restore databases
+    for db in agba_core agba_analytics agba_recordings agba_biometrics; do
+        if [ -f "${BACKUP_DIR}/${BACKUP_NAME}/${db}.sql.gz" ]; then
+            echo "Restoring database: $db"
+            
+            # Drop and recreate database
+            psql -c "DROP DATABASE IF EXISTS ${db};"
+            psql -c "CREATE DATABASE ${db};"
+            
+            # Restore from backup
+            gunzip -c "${BACKUP_DIR}/${BACKUP_NAME}/${db}.sql.gz" | psql -d "$db"
+        fi
+    done
+    
+    echo "Restore completed successfully at $(date)"
+    
+  wal-archive.sh: |
+    #!/bin/bash
+    # WAL archiving script for continuous backup
+    
+    WAL_FILE="$1"
+    WAL_PATH="$2"
+    ARCHIVE_DIR="/var/lib/postgresql/archive"
+    
+    # Copy WAL file to archive directory
+    cp "$WAL_PATH" "${ARCHIVE_DIR}/${WAL_FILE}"
+    
+    # Upload to S3 if configured
+    if [ -n "$AWS_S3_BUCKET" ]; then
+        aws s3 cp "${ARCHIVE_DIR}/${WAL_FILE}" "s3://${AWS_S3_BUCKET}/wal-archive/${WAL_FILE}"
+    fi
+    
+    # Cleanup old WAL files (keep last 7 days)
+    find "${ARCHIVE_DIR}" -name "*.wal" -mtime +7 -delete
+
+---
+# Backup CronJob - Daily Full Backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgresql-backup-daily
+  namespace: agba-data
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            command:
+            - /bin/bash
+            - /scripts/backup.sh
+            env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-secret
+                  key: postgres-password
+            - name: AWS_S3_BUCKET
+              value: "agba-database-backups"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: secret-access-key
+            volumeMounts:
+            - name: backup-scripts
+              mountPath: /scripts
+            - name: backup-storage
+              mountPath: /backups
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+          volumes:
+          - name: backup-scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0755
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-storage-pvc
+          restartPolicy: OnFailure
+
+---
+# Backup CronJob - Weekly Full Backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgresql-backup-weekly
+  namespace: agba-data
+spec:
+  schedule: "0 1 * * 0"  # Weekly on Sunday at 1 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:15-alpine
+            command:
+            - /bin/bash
+            - /scripts/backup.sh
+            env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-secret
+                  key: postgres-password
+            - name: AWS_S3_BUCKET
+              value: "agba-database-backups"
+            - name: BACKUP_TYPE
+              value: "weekly"
+            volumeMounts:
+            - name: backup-scripts
+              mountPath: /scripts
+            - name: backup-storage
+              mountPath: /backups
+          volumes:
+          - name: backup-scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0755
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-storage-pvc
+          restartPolicy: OnFailure
+
+---
+# Backup Storage PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-storage-pvc
+  namespace: agba-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: "gp3"
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# AWS Credentials Secret (to be created manually)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-credentials
+  namespace: agba-data
+type: Opaque
+data:
+  access-key-id: # Base64 encoded AWS access key
+  secret-access-key: # Base64 encoded AWS secret key
+
+---
+# Backup Restore Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgresql-restore-job
+  namespace: agba-data
+spec:
+  template:
+    spec:
+      containers:
+      - name: restore
+        image: postgres:15-alpine
+        command:
+        - /bin/bash
+        - /scripts/restore.sh
+        - "$(BACKUP_NAME)"
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: postgres-password
+        - name: BACKUP_NAME
+          value: "agba_backup_20250609_020000"  # Replace with actual backup name
+        - name: AWS_S3_BUCKET
+          value: "agba-database-backups"
+        volumeMounts:
+        - name: backup-scripts
+          mountPath: /scripts
+        - name: backup-storage
+          mountPath: /backups
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 4000m
+            memory: 8Gi
+      volumes:
+      - name: backup-scripts
+        configMap:
+          name: backup-scripts
+          defaultMode: 0755
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: backup-storage-pvc
+      restartPolicy: Never

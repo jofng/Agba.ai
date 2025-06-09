@@ -1,0 +1,444 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeswitch-service
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+    component: telephony
+    version: v1.0.0
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: freeswitch-service
+  template:
+    metadata:
+      labels:
+        app: freeswitch-service
+        component: telephony
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: freeswitch-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: freeswitch-service
+        image: agba-ai/freeswitch-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: sip-internal
+          containerPort: 5060
+          protocol: UDP
+        - name: sip-external
+          containerPort: 5080
+          protocol: UDP
+        - name: event-socket
+          containerPort: 8021
+          protocol: TCP
+        - name: rtp-start
+          containerPort: 16384
+          protocol: UDP
+        - name: rtp-end
+          containerPort: 32768
+          protocol: UDP
+        env:
+        - name: PORT
+          value: "8080"
+        - name: GIN_MODE
+          value: "release"
+        - name: DB_HOST
+          value: "postgresql"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "agba_freeswitch"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-secret
+              key: password
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: password
+        - name: NATS_URL
+          value: "nats://nats:4222"
+        - name: FREESWITCH_HOST
+          value: "localhost"
+        - name: FREESWITCH_EVENT_SOCKET_HOST
+          value: "localhost"
+        - name: FREESWITCH_EVENT_SOCKET_PORT
+          value: "8021"
+        - name: FREESWITCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: freeswitch-secret
+              key: password
+        - name: RECORDING_SERVICE_HOST
+          value: "recording-service"
+        - name: MONITORING_SERVICE_HOST
+          value: "monitoring-service"
+        - name: USER_SERVICE_HOST
+          value: "user-management-service"
+        - name: CONFIG_SERVICE_HOST
+          value: "config-service"
+        - name: NOTIFICATION_SERVICE_HOST
+          value: "notification-service"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs
+          readOnly: true
+        - name: freeswitch-config
+          mountPath: /usr/local/freeswitch/conf
+          readOnly: true
+        - name: recordings-volume
+          mountPath: /usr/local/freeswitch/recordings
+        - name: logs-volume
+          mountPath: /app/logs
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+      volumes:
+      - name: config-volume
+        configMap:
+          name: freeswitch-service-config
+      - name: freeswitch-config
+        configMap:
+          name: freeswitch-config
+      - name: recordings-volume
+        persistentVolumeClaim:
+          claimName: freeswitch-recordings-pvc
+      - name: logs-volume
+        emptyDir: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+      - key: "agba-ai/telephony"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - freeswitch-service
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeswitch-service
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+    component: telephony
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: sip-internal
+    port: 5060
+    targetPort: sip-internal
+    protocol: UDP
+  - name: sip-external
+    port: 5080
+    targetPort: sip-external
+    protocol: UDP
+  - name: event-socket
+    port: 8021
+    targetPort: event-socket
+    protocol: TCP
+  selector:
+    app: freeswitch-service
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeswitch-service-external
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+    component: telephony
+spec:
+  type: LoadBalancer
+  ports:
+  - name: sip-external
+    port: 5080
+    targetPort: sip-external
+    protocol: UDP
+  - name: rtp-range
+    port: 16384
+    targetPort: 16384
+    protocol: UDP
+  selector:
+    app: freeswitch-service
+  loadBalancerSourceRanges:
+  - 0.0.0.0/0
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: freeswitch-service
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: freeswitch-service-config
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8080
+      read_timeout: 30
+      write_timeout: 30
+      idle_timeout: 120
+    
+    database:
+      host: "postgresql"
+      port: 5432
+      user: "postgres"
+      dbname: "agba_freeswitch"
+      sslmode: "disable"
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 300
+    
+    redis:
+      host: "redis"
+      port: 6379
+      db: 0
+    
+    nats:
+      url: "nats://nats:4222"
+      cluster_id: "agba-cluster"
+      client_id: "freeswitch-service"
+    
+    freeswitch:
+      host: "localhost"
+      port: 5060
+      event_socket_host: "localhost"
+      event_socket_port: 8021
+      config_path: "/usr/local/freeswitch/conf"
+      log_path: "/usr/local/freeswitch/log"
+      recordings_path: "/usr/local/freeswitch/recordings"
+      max_concurrent_calls: 1000
+      call_timeout: 60
+      default_trunk: "agba_trunk"
+    
+    logging:
+      level: "info"
+      format: "json"
+      output: "stdout"
+    
+    services:
+      recording_service:
+        host: "recording-service"
+        port: 8080
+        timeout: 30
+        retries: 3
+      monitoring_service:
+        host: "monitoring-service"
+        port: 8080
+        timeout: 30
+        retries: 3
+      user_service:
+        host: "user-management-service"
+        port: 8080
+        timeout: 30
+        retries: 3
+      config_service:
+        host: "config-service"
+        port: 8080
+        timeout: 30
+        retries: 3
+      notification_service:
+        host: "notification-service"
+        port: 8080
+        timeout: 30
+        retries: 3
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: freeswitch-config
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+data:
+  vars.xml: |
+    <?xml version="1.0" encoding="utf-8"?>
+    <include>
+      <X-PRE-PROCESS cmd="set" data="default_password=1234"/>
+      <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+      <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
+      <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
+      <X-PRE-PROCESS cmd="set" data="use_profile=internal"/>
+      <X-PRE-PROCESS cmd="set" data="bind_server_ip=auto"/>
+      <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${local_ip_v4}"/>
+      <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${local_ip_v4}"/>
+      <X-PRE-PROCESS cmd="set" data="internal_auth_calls=true"/>
+      <X-PRE-PROCESS cmd="set" data="internal_sip_port=5060"/>
+      <X-PRE-PROCESS cmd="set" data="external_sip_port=5080"/>
+      <X-PRE-PROCESS cmd="set" data="rtp_start_port=16384"/>
+      <X-PRE-PROCESS cmd="set" data="rtp_end_port=32768"/>
+      <X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA,GSM"/>
+      <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=OPUS,G722,PCMU,PCMA,GSM"/>
+      <X-PRE-PROCESS cmd="set" data="recordings_dir=/usr/local/freeswitch/recordings"/>
+      <X-PRE-PROCESS cmd="set" data="event_socket_password=ClueCon"/>
+      <X-PRE-PROCESS cmd="set" data="event_socket_port=8021"/>
+      <X-PRE-PROCESS cmd="set" data="agba_api_endpoint=http://api-gateway:8080"/>
+      <X-PRE-PROCESS cmd="set" data="default_gateway=agba_trunk"/>
+      <X-PRE-PROCESS cmd="set" data="max_sessions=1000"/>
+      <X-PRE-PROCESS cmd="set" data="sessions_per_second=30"/>
+    </include>
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: freeswitch-recordings-pvc
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: fast-ssd
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: freeswitch-secret
+  namespace: agba-ai
+  labels:
+    app: freeswitch-service
+type: Opaque
+data:
+  password: Q2x1ZUNvbg== # Base64 encoded "ClueCon"
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: freeswitch-service-netpol
+  namespace: agba-ai
+spec:
+  podSelector:
+    matchLabels:
+      app: freeswitch-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-ai
+    - podSelector:
+        matchLabels:
+          component: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from: []
+    ports:
+    - protocol: UDP
+      port: 5060
+    - protocol: UDP
+      port: 5080
+    - protocol: UDP
+      port: 16384
+    - protocol: UDP
+      port: 32768
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: agba-ai
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 5432
