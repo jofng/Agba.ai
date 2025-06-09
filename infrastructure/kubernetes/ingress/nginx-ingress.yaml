@@ -1,0 +1,122 @@
+# NGINX Ingress Controller Configuration for Agba Voice AI Platform
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/instance: ingress-nginx
+
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: nginx-ingress
+  namespace: kube-system
+spec:
+  chart: ingress-nginx
+  repo: https://kubernetes.github.io/ingress-nginx
+  targetNamespace: ingress-nginx
+  valuesContent: |-
+    controller:
+      replicaCount: 3
+      
+      # Resource configuration
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+      
+      # Service configuration
+      service:
+        type: LoadBalancer
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+          service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+          service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+      
+      # Configuration
+      config:
+        # Performance tuning
+        worker-processes: "auto"
+        worker-connections: "16384"
+        max-worker-open-files: "65536"
+        
+        # SSL configuration
+        ssl-protocols: "TLSv1.2 TLSv1.3"
+        ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+        ssl-prefer-server-ciphers: "on"
+        ssl-session-cache: "shared:SSL:10m"
+        ssl-session-timeout: "10m"
+        
+        # Security headers
+        add-headers: "agba-system/security-headers"
+        
+        # Rate limiting
+        rate-limit-rps: "100"
+        rate-limit-connections: "10"
+        
+        # Timeouts
+        proxy-connect-timeout: "5"
+        proxy-send-timeout: "60"
+        proxy-read-timeout: "60"
+        proxy-body-size: "50m"
+        
+        # Logging
+        log-format-upstream: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_length $request_time [$proxy_upstream_name] [$proxy_alternative_upstream_name] $upstream_addr $upstream_response_length $upstream_response_time $upstream_status $req_id'
+        
+        # WebSocket support
+        proxy-read-timeout: "3600"
+        proxy-send-timeout: "3600"
+      
+      # Metrics
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+      
+      # Autoscaling
+      autoscaling:
+        enabled: true
+        minReplicas: 3
+        maxReplicas: 10
+        targetCPUUtilizationPercentage: 70
+        targetMemoryUtilizationPercentage: 80
+
+---
+# Security Headers ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-headers
+  namespace: agba-system
+data:
+  X-Frame-Options: "DENY"
+  X-Content-Type-Options: "nosniff"
+  X-XSS-Protection: "1; mode=block"
+  Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+  Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: https:; media-src 'self'; object-src 'none'; frame-ancestors 'none';"
+  Referrer-Policy: "strict-origin-when-cross-origin"
+  Permissions-Policy: "geolocation=(), microphone=(self), camera=(self)"
+
+---
+# Rate Limiting ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limit-config
+  namespace: agba-system
+data:
+  rate-limit.conf: |
+    # Rate limiting zones
+    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/s;
+    limit_req_zone $binary_remote_addr zone=upload:10m rate=1r/s;
+    
+    # Connection limiting
+    limit_conn_zone $binary_remote_addr zone=conn_limit_per_ip:10m;
+    limit_conn conn_limit_per_ip 20;
