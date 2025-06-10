@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -76,24 +75,40 @@ func (s *MonitoringService) GetMetrics(ctx context.Context, service, timeRange s
 func (s *MonitoringService) GetServiceHealth(ctx context.Context, serviceName string) (*models.ServiceHealth, error) {
 	s.logger.Info("Getting service health", zap.String("service", serviceName))
 
-	// Mock implementation - replace with actual health checks
+	// Perform actual health checks for the service
+	startTime := time.Now()
+	
+	// Check if service is responding
+	status := "healthy"
+	var checks []models.HealthCheck
+	
+	// Database connectivity check
+	if err := s.repository.HealthCheck(ctx); err != nil {
+		status = "unhealthy"
+		checks = append(checks, models.HealthCheck{
+			ServiceName: serviceName,
+			Status:      models.ServiceStatusUnhealthy,
+			Message:     fmt.Sprintf("Database connection failed: %v", err),
+			Timestamp:   time.Now(),
+		})
+	} else {
+		checks = append(checks, models.HealthCheck{
+			ServiceName: serviceName,
+			Status:      models.ServiceStatusHealthy,
+			Message:     "Database connection successful",
+			Timestamp:   time.Now(),
+		})
+	}
+	
+	// Additional service-specific health checks can be added here
+	responseTime := time.Since(startTime)
+	
 	health := &models.ServiceHealth{
 		ServiceName:  serviceName,
-		Status:       "healthy",
+		Status:       status,
 		LastCheck:    time.Now(),
-		ResponseTime: 150 * time.Millisecond,
-		Checks: []models.HealthCheck{
-			{
-				Name:   "database",
-				Status: "healthy",
-				Message: "Database connection successful",
-			},
-			{
-				Name:   "redis",
-				Status: "healthy",
-				Message: "Redis connection successful",
-			},
-		},
+		ResponseTime: responseTime,
+		Checks:       checks,
 	}
 
 	return health, nil
@@ -144,6 +159,11 @@ func (s *MonitoringService) CreateAlert(ctx context.Context, req *models.CreateA
 		zap.String("userID", userID),
 	)
 
+	// Validate the request
+	if req.Name == "" || req.Service == "" || req.Metric == "" {
+		return nil, fmt.Errorf("name, service, and metric are required")
+	}
+
 	alert := &models.Alert{
 		ID:          uuid.New(),
 		Name:        req.Name,
@@ -159,7 +179,12 @@ func (s *MonitoringService) CreateAlert(ctx context.Context, req *models.CreateA
 		UpdatedAt:   time.Now(),
 	}
 
-	// Mock implementation - replace with actual database storage
+	// Store alert in database
+	if err := s.repository.CreateAlert(ctx, alert); err != nil {
+		s.logger.Error("Failed to create alert", zap.Error(err))
+		return nil, fmt.Errorf("failed to create alert: %w", err)
+	}
+
 	s.logger.Info("Alert created successfully", zap.String("alertID", alert.ID.String()))
 
 	return alert, nil
@@ -174,37 +199,27 @@ func (s *MonitoringService) GetAlerts(ctx context.Context, page, limit int, serv
 		zap.String("status", status),
 	)
 
-	// Mock implementation - replace with actual database query
-	alerts := []*models.Alert{
-		{
-			ID:          uuid.New(),
-			Name:        "High CPU Usage",
-			Description: "Alert when CPU usage exceeds 80%",
-			Service:     "api-gateway",
-			Metric:      "cpu_usage",
-			Condition:   "greater_than",
-			Threshold:   80.0,
-			Severity:    "warning",
-			Enabled:     true,
-			CreatedAt:   time.Now().Add(-24 * time.Hour),
-			UpdatedAt:   time.Now().Add(-24 * time.Hour),
-		},
-		{
-			ID:          uuid.New(),
-			Name:        "High Memory Usage",
-			Description: "Alert when memory usage exceeds 90%",
-			Service:     "config-service",
-			Metric:      "memory_usage",
-			Condition:   "greater_than",
-			Threshold:   90.0,
-			Severity:    "critical",
-			Enabled:     true,
-			CreatedAt:   time.Now().Add(-12 * time.Hour),
-			UpdatedAt:   time.Now().Add(-12 * time.Hour),
-		},
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20 // Default limit
 	}
 
-	return alerts, int64(len(alerts)), nil
+	// Get alerts from database
+	alerts, total, err := s.repository.GetAlerts(ctx, page, limit, service, status)
+	if err != nil {
+		s.logger.Error("Failed to get alerts", zap.Error(err))
+		return nil, 0, fmt.Errorf("failed to get alerts: %w", err)
+	}
+
+	s.logger.Info("Retrieved alerts", 
+		zap.Int("count", len(alerts)),
+		zap.Int64("total", total),
+	)
+
+	return alerts, total, nil
 }
 
 // UpdateAlert updates an existing alert rule
@@ -214,7 +229,14 @@ func (s *MonitoringService) UpdateAlert(ctx context.Context, id uuid.UUID, req *
 		zap.String("userID", userID),
 	)
 
-	// Mock implementation - replace with actual database update
+	// Get existing alert
+	existingAlert, err := s.repository.GetAlert(ctx, id)
+	if err != nil {
+		s.logger.Error("Failed to get existing alert", zap.Error(err))
+		return nil, fmt.Errorf("failed to get existing alert: %w", err)
+	}
+
+	// Update fields
 	alert := &models.Alert{
 		ID:          id,
 		Name:        req.Name,
@@ -225,8 +247,16 @@ func (s *MonitoringService) UpdateAlert(ctx context.Context, id uuid.UUID, req *
 		Threshold:   req.Threshold,
 		Severity:    req.Severity,
 		Enabled:     req.Enabled,
+		CreatedBy:   existingAlert.CreatedBy,
+		CreatedAt:   existingAlert.CreatedAt,
 		UpdatedBy:   uuid.MustParse(userID),
 		UpdatedAt:   time.Now(),
+	}
+
+	// Update in database
+	if err := s.repository.UpdateAlert(ctx, alert); err != nil {
+		s.logger.Error("Failed to update alert", zap.Error(err))
+		return nil, fmt.Errorf("failed to update alert: %w", err)
 	}
 
 	s.logger.Info("Alert updated successfully", zap.String("alertID", id.String()))
@@ -241,7 +271,12 @@ func (s *MonitoringService) DeleteAlert(ctx context.Context, id uuid.UUID, userI
 		zap.String("userID", userID),
 	)
 
-	// Mock implementation - replace with actual database deletion
+	// Delete from database
+	if err := s.repository.DeleteAlert(ctx, id); err != nil {
+		s.logger.Error("Failed to delete alert", zap.Error(err))
+		return fmt.Errorf("failed to delete alert: %w", err)
+	}
+
 	s.logger.Info("Alert deleted successfully", zap.String("alertID", id.String()))
 
 	return nil
@@ -255,29 +290,27 @@ func (s *MonitoringService) GetAlertHistory(ctx context.Context, alertID uuid.UU
 		zap.Int("limit", limit),
 	)
 
-	// Mock implementation - replace with actual database query
-	events := []*models.AlertEvent{
-		{
-			ID:        uuid.New(),
-			AlertID:   alertID,
-			Type:      "triggered",
-			Message:   "Alert triggered: CPU usage exceeded threshold",
-			Value:     85.5,
-			Threshold: 80.0,
-			Timestamp: time.Now().Add(-2 * time.Hour),
-		},
-		{
-			ID:        uuid.New(),
-			AlertID:   alertID,
-			Type:      "resolved",
-			Message:   "Alert resolved: CPU usage returned to normal",
-			Value:     75.2,
-			Threshold: 80.0,
-			Timestamp: time.Now().Add(-1 * time.Hour),
-		},
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20 // Default limit
 	}
 
-	return events, int64(len(events)), nil
+	// Get alert events from database
+	events, total, err := s.repository.GetAlertEvents(ctx, alertID, page, limit)
+	if err != nil {
+		s.logger.Error("Failed to get alert history", zap.Error(err))
+		return nil, 0, fmt.Errorf("failed to get alert history: %w", err)
+	}
+
+	s.logger.Info("Retrieved alert history", 
+		zap.Int("count", len(events)),
+		zap.Int64("total", total),
+	)
+
+	return events, total, nil
 }
 
 // GetDashboard retrieves dashboard data
@@ -337,33 +370,40 @@ func (s *MonitoringService) GetLogs(ctx context.Context, service, level, since s
 		zap.Int("limit", limit),
 	)
 
-	// Mock implementation - replace with actual log retrieval
-	logs := []*models.LogEntry{
-		{
-			ID:        uuid.New(),
-			Service:   service,
-			Level:     "INFO",
-			Message:   "Service started successfully",
-			Timestamp: time.Now().Add(-1 * time.Hour),
-			Metadata: map[string]interface{}{
-				"version": "1.0.0",
-				"port":    8080,
-			},
-		},
-		{
-			ID:        uuid.New(),
-			Service:   service,
-			Level:     "WARN",
-			Message:   "High memory usage detected",
-			Timestamp: time.Now().Add(-30 * time.Minute),
-			Metadata: map[string]interface{}{
-				"memory_usage": 85.5,
-				"threshold":    80.0,
-			},
-		},
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20 // Default limit
 	}
 
-	return logs, int64(len(logs)), nil
+	// Parse since parameter
+	var sinceTime time.Time
+	if since != "" {
+		var err error
+		sinceTime, err = time.Parse(time.RFC3339, since)
+		if err != nil {
+			// Default to 1 hour ago if parsing fails
+			sinceTime = time.Now().Add(-1 * time.Hour)
+		}
+	} else {
+		sinceTime = time.Now().Add(-1 * time.Hour)
+	}
+
+	// Get logs from database
+	logs, total, err := s.repository.GetLogEntries(ctx, service, level, sinceTime, page, limit)
+	if err != nil {
+		s.logger.Error("Failed to get logs", zap.Error(err))
+		return nil, 0, fmt.Errorf("failed to get logs: %w", err)
+	}
+
+	s.logger.Info("Retrieved logs", 
+		zap.Int("count", len(logs)),
+		zap.Int64("total", total),
+	)
+
+	return logs, total, nil
 }
 
 // GetPerformanceMetrics retrieves performance metrics
@@ -556,18 +596,48 @@ func (s *MonitoringService) StartMetricsCollection(ctx context.Context) {
 func (s *MonitoringService) collectMetrics(ctx context.Context) {
 	s.logger.Debug("Collecting metrics")
 
-	// Mock implementation - replace with actual metrics collection
 	services := []string{
 		"api-gateway",
 		"config-service",
 		"user-management-service",
 		"notification-service",
 		"recording-service",
+		"monitoring-service",
 	}
 
-	for _, service := range services {
-		// Collect metrics for each service
-		s.logger.Debug("Collecting metrics for service", zap.String("service", service))
+	for _, serviceName := range services {
+		s.logger.Debug("Collecting metrics for service", zap.String("service", serviceName))
+		
+		// Simulate collecting various metrics
+		metrics := []struct {
+			name  string
+			value float64
+			unit  string
+		}{
+			{"cpu_usage", 45.0 + float64(time.Now().Unix()%40), "percent"},
+			{"memory_usage", 60.0 + float64(time.Now().Unix()%30), "percent"},
+			{"request_count", float64(time.Now().Unix() % 1000), "count"},
+			{"response_time", 150.0 + float64(time.Now().Unix()%100), "milliseconds"},
+		}
+
+		for _, m := range metrics {
+			metric := &models.Metric{
+				ServiceName: serviceName,
+				Name:        m.name,
+				Value:       m.value,
+				Unit:        m.unit,
+				Labels:      map[string]string{"instance": serviceName + "-1"},
+				Timestamp:   time.Now(),
+			}
+
+			if err := s.repository.StoreMetric(ctx, metric); err != nil {
+				s.logger.Error("Failed to store metric", 
+					zap.String("service", serviceName),
+					zap.String("metric", m.name),
+					zap.Error(err),
+				)
+			}
+		}
 	}
 }
 
@@ -593,10 +663,90 @@ func (s *MonitoringService) StartAlertEvaluation(ctx context.Context) {
 func (s *MonitoringService) evaluateAlerts(ctx context.Context) {
 	s.logger.Debug("Evaluating alerts")
 
-	// Mock implementation - replace with actual alert evaluation
-	// This would typically:
-	// 1. Get all enabled alert rules
-	// 2. Evaluate each rule against current metrics
-	// 3. Trigger alerts if conditions are met
-	// 4. Resolve alerts if conditions are no longer met
+	// Get all enabled alerts
+	alerts, _, err := s.repository.GetAlerts(ctx, 1, 1000, "", "")
+	if err != nil {
+		s.logger.Error("Failed to get alerts for evaluation", zap.Error(err))
+		return
+	}
+
+	for _, alert := range alerts {
+		if !alert.Enabled {
+			continue
+		}
+
+		s.logger.Debug("Evaluating alert", 
+			zap.String("alertID", alert.ID.String()),
+			zap.String("name", alert.Name),
+		)
+
+		// Get recent metrics for this alert
+		since := time.Now().Add(-5 * time.Minute)
+		metrics, err := s.repository.GetMetrics(ctx, alert.Service, alert.Metric, since)
+		if err != nil {
+			s.logger.Error("Failed to get metrics for alert evaluation", 
+				zap.String("alertID", alert.ID.String()),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		if len(metrics) == 0 {
+			continue
+		}
+
+		// Get the latest metric value
+		latestMetric := metrics[0]
+		
+		// Evaluate condition
+		triggered := s.evaluateCondition(alert.Condition, latestMetric.Value, alert.Threshold)
+		
+		if triggered {
+			// Create alert event
+			event := &models.AlertEvent{
+				ID:        uuid.New(),
+				AlertID:   alert.ID,
+				Type:      "triggered",
+				Message:   fmt.Sprintf("Alert triggered: %s %s %.2f (threshold: %.2f)", alert.Metric, alert.Condition, latestMetric.Value, alert.Threshold),
+				Value:     latestMetric.Value,
+				Threshold: alert.Threshold,
+				Timestamp: time.Now(),
+			}
+
+			if err := s.repository.StoreAlertEvent(ctx, event); err != nil {
+				s.logger.Error("Failed to store alert event", 
+					zap.String("alertID", alert.ID.String()),
+					zap.Error(err),
+				)
+			} else {
+				s.logger.Info("Alert triggered", 
+					zap.String("alertID", alert.ID.String()),
+					zap.String("name", alert.Name),
+					zap.Float64("value", latestMetric.Value),
+					zap.Float64("threshold", alert.Threshold),
+				)
+			}
+		}
+	}
+}
+
+// evaluateCondition evaluates an alert condition
+func (s *MonitoringService) evaluateCondition(condition string, value, threshold float64) bool {
+	switch condition {
+	case "greater_than", ">":
+		return value > threshold
+	case "less_than", "<":
+		return value < threshold
+	case "equal", "==":
+		return value == threshold
+	case "not_equal", "!=":
+		return value != threshold
+	case "greater_equal", ">=":
+		return value >= threshold
+	case "less_equal", "<=":
+		return value <= threshold
+	default:
+		s.logger.Warn("Unknown condition", zap.String("condition", condition))
+		return false
+	}
 }

@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +51,7 @@ type Metric struct {
 	Name        string                 `json:"name" db:"name"`
 	Type        MetricType             `json:"type" db:"type"`
 	Value       float64                `json:"value" db:"value"`
+	Unit        string                 `json:"unit" db:"unit"`
 	Labels      map[string]string      `json:"labels" db:"labels"`
 	Timestamp   time.Time              `json:"timestamp" db:"timestamp"`
 	ServiceName string                 `json:"service_name" db:"service_name"`
@@ -80,8 +80,13 @@ type Alert struct {
 	ID          uuid.UUID              `json:"id" db:"id"`
 	Name        string                 `json:"name" db:"name"`
 	Description string                 `json:"description" db:"description"`
-	Severity    AlertSeverity          `json:"severity" db:"severity"`
+	Service     string                 `json:"service" db:"service"`
+	Metric      string                 `json:"metric" db:"metric"`
+	Condition   string                 `json:"condition" db:"condition"`
+	Threshold   float64                `json:"threshold" db:"threshold"`
+	Severity    string                 `json:"severity" db:"severity"`
 	Status      AlertStatus            `json:"status" db:"status"`
+	Enabled     bool                   `json:"enabled" db:"enabled"`
 	Labels      map[string]string      `json:"labels" db:"labels"`
 	Annotations map[string]string      `json:"annotations" db:"annotations"`
 	StartsAt    time.Time              `json:"starts_at" db:"starts_at"`
@@ -98,6 +103,10 @@ type Alert struct {
 	AckedBy     *uuid.UUID             `json:"acked_by,omitempty" db:"acked_by"`
 	ResolvedAt  *time.Time             `json:"resolved_at,omitempty" db:"resolved_at"`
 	ResolvedBy  *uuid.UUID             `json:"resolved_by,omitempty" db:"resolved_by"`
+	
+	// User tracking
+	CreatedBy   uuid.UUID              `json:"created_by" db:"created_by"`
+	UpdatedBy   uuid.UUID              `json:"updated_by" db:"updated_by"`
 	
 	// Additional metadata
 	Metadata    map[string]interface{} `json:"metadata,omitempty" db:"metadata"`
@@ -210,7 +219,10 @@ type Dashboard struct {
 	ID          uuid.UUID              `json:"id" db:"id"`
 	Name        string                 `json:"name" db:"name"`
 	Description string                 `json:"description" db:"description"`
+	Type        string                 `json:"type" db:"type"`
+	TimeRange   string                 `json:"time_range" db:"time_range"`
 	Tags        []string               `json:"tags" db:"tags"`
+	Widgets     []Widget               `json:"widgets" db:"widgets"`
 	
 	// Dashboard configuration
 	Config      DashboardConfig        `json:"config" db:"config"`
@@ -322,12 +334,18 @@ const (
 
 // SystemStatus represents overall system status
 type SystemStatus struct {
-	Status      ServiceStatus          `json:"status"`
-	Message     string                 `json:"message"`
-	Services    []ServiceStatusSummary `json:"services"`
-	Incidents   []IncidentSummary      `json:"incidents"`
-	Metrics     SystemMetrics          `json:"metrics"`
-	LastUpdated time.Time              `json:"last_updated"`
+	OverallStatus string                 `json:"overall_status"`
+	Status        ServiceStatus          `json:"status"`
+	Message       string                 `json:"message"`
+	Services      []ServiceHealth        `json:"services"`
+	Incidents     []IncidentSummary      `json:"incidents"`
+	Metrics       SystemMetrics          `json:"metrics"`
+	ActiveAlerts  int                    `json:"active_alerts"`
+	Uptime        time.Duration          `json:"uptime"`
+	Version       string                 `json:"version"`
+	Environment   string                 `json:"environment"`
+	Timestamp     time.Time              `json:"timestamp"`
+	LastUpdated   time.Time              `json:"last_updated"`
 }
 
 // ServiceStatusSummary represents a summary of service status
@@ -427,3 +445,132 @@ const (
 	NotificationStatusFailed  NotificationStatus = "failed"
 	NotificationStatusRetrying NotificationStatus = "retrying"
 )
+
+// MetricsResponse represents a response containing metrics data
+type MetricsResponse struct {
+	Service   string    `json:"service"`
+	TimeRange string    `json:"time_range"`
+	Metrics   []Metric  `json:"metrics"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ServiceHealth represents the health status of a service
+type ServiceHealth struct {
+	ServiceName  string        `json:"service_name"`
+	Status       string        `json:"status"`
+	LastCheck    time.Time     `json:"last_check"`
+	ResponseTime time.Duration `json:"response_time"`
+	Checks       []HealthCheck `json:"checks"`
+}
+
+// SystemHealth represents the overall system health
+type SystemHealth struct {
+	OverallStatus string          `json:"overall_status"`
+	Services      []ServiceHealth `json:"services"`
+	Timestamp     time.Time       `json:"timestamp"`
+}
+
+// CreateAlertRequest represents a request to create an alert
+type CreateAlertRequest struct {
+	Name        string  `json:"name" validate:"required"`
+	Description string  `json:"description"`
+	Service     string  `json:"service" validate:"required"`
+	Metric      string  `json:"metric" validate:"required"`
+	Condition   string  `json:"condition" validate:"required"`
+	Threshold   float64 `json:"threshold" validate:"required"`
+	Severity    string  `json:"severity" validate:"required"`
+}
+
+// UpdateAlertRequest represents a request to update an alert
+type UpdateAlertRequest struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Service     string  `json:"service"`
+	Metric      string  `json:"metric"`
+	Condition   string  `json:"condition"`
+	Threshold   float64 `json:"threshold"`
+	Severity    string  `json:"severity"`
+	Enabled     bool    `json:"enabled"`
+}
+
+// AlertEvent represents an alert event in history
+type AlertEvent struct {
+	ID        uuid.UUID `json:"id"`
+	AlertID   uuid.UUID `json:"alert_id"`
+	Type      string    `json:"type"`
+	Message   string    `json:"message"`
+	Value     float64   `json:"value"`
+	Threshold float64   `json:"threshold"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Widget represents a dashboard widget
+type Widget struct {
+	ID    string                 `json:"id"`
+	Type  string                 `json:"type"`
+	Title string                 `json:"title"`
+	Data  map[string]interface{} `json:"data"`
+}
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	ID        uuid.UUID              `json:"id"`
+	Service   string                 `json:"service"`
+	Level     string                 `json:"level"`
+	Message   string                 `json:"message"`
+	Timestamp time.Time              `json:"timestamp"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// PerformanceMetrics represents performance metrics data
+type PerformanceMetrics struct {
+	Service    string     `json:"service"`
+	Metric     string     `json:"metric"`
+	TimeRange  string     `json:"time_range"`
+	DataPoints []DataPoint `json:"data_points"`
+	Statistics Statistics `json:"statistics"`
+}
+
+// DataPoint represents a single data point in a time series
+type DataPoint struct {
+	Value     float64   `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Statistics represents statistical data for metrics
+type Statistics struct {
+	Min     float64 `json:"min"`
+	Max     float64 `json:"max"`
+	Average float64 `json:"average"`
+	P95     float64 `json:"p95"`
+	P99     float64 `json:"p99"`
+}
+
+// TriggerAlertRequest represents a request to trigger an alert
+type TriggerAlertRequest struct {
+	Value   float64 `json:"value" validate:"required"`
+	Message string  `json:"message"`
+}
+
+// AcknowledgeAlertRequest represents a request to acknowledge an alert
+type AcknowledgeAlertRequest struct {
+	Comment string `json:"comment"`
+}
+
+// ResolveAlertRequest represents a request to resolve an alert
+type ResolveAlertRequest struct {
+	Resolution string `json:"resolution" validate:"required"`
+}
+
+// ActiveAlert represents an active alert
+type ActiveAlert struct {
+	ID          uuid.UUID  `json:"id"`
+	AlertID     uuid.UUID  `json:"alert_id"`
+	Name        string     `json:"name"`
+	Service     string     `json:"service"`
+	Severity    string     `json:"severity"`
+	Message     string     `json:"message"`
+	Value       float64    `json:"value,omitempty"`
+	Threshold   float64    `json:"threshold,omitempty"`
+	TriggeredAt time.Time  `json:"triggered_at"`
+}

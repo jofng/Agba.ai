@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,15 +11,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agba-ai/monitoring-service/internal/alerting"
 	"github.com/agba-ai/monitoring-service/internal/config"
 	"github.com/agba-ai/monitoring-service/internal/handlers"
-	"github.com/agba-ai/monitoring-service/internal/metrics"
 	"github.com/agba-ai/monitoring-service/internal/repository"
 	"github.com/agba-ai/monitoring-service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 func main() {
@@ -35,57 +35,23 @@ func main() {
 		logger.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
-	// Initialize metrics collector
-	metricsCollector := metrics.NewCollector(logger)
-
 	// Initialize database connection
-	db, err := repository.NewDatabase(cfg.Database, logger)
+	db, err := sql.Open("postgres", cfg.Database.DSN)
 	if err != nil {
 		logger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 	defer db.Close()
 
-	// Initialize Redis connection
-	redisClient, err := repository.NewRedis(cfg.Redis, logger)
-	if err != nil {
-		logger.Fatal("Failed to connect to Redis", zap.Error(err))
-	}
-	defer redisClient.Close()
-
-	// Initialize NATS connection
-	natsConn, err := repository.NewNATS(cfg.NATS, logger)
-	if err != nil {
-		logger.Fatal("Failed to connect to NATS", zap.Error(err))
-	}
-	defer natsConn.Close()
-
-	// Initialize Prometheus client for querying
-	promClient, err := repository.NewPrometheusClient(cfg.Prometheus, logger)
-	if err != nil {
-		logger.Fatal("Failed to initialize Prometheus client", zap.Error(err))
+	// Test database connection
+	if err := db.Ping(); err != nil {
+		logger.Fatal("Failed to ping database", zap.Error(err))
 	}
 
-	// Initialize repositories
-	metricsRepo := repository.NewMetricsRepository(db, redisClient, logger)
-	alertRepo := repository.NewAlertRepository(db, logger)
-	serviceRepo := repository.NewServiceRepository(db, redisClient, logger)
+	// Initialize repository
+	repo := repository.NewRepository(db, logger)
 
-	// Initialize alerting manager
-	alertManager := alerting.NewManager(cfg.Alerting, natsConn, logger)
-
-	// Initialize services
-	monitoringService := service.NewMonitoringService(
-		metricsRepo,
-		alertRepo,
-		serviceRepo,
-		promClient,
-		alertManager,
-		metricsCollector,
-		logger,
-	)
-
-	healthService := service.NewHealthService(serviceRepo, logger)
-	alertingService := service.NewAlertingService(alertRepo, alertManager, logger)
+	// Initialize service
+	monitoringService := service.NewMonitoringService(repo, logger)
 
 	// Set Gin mode
 	if cfg.Environment == "production" {
@@ -101,10 +67,17 @@ func main() {
 
 	// Health check endpoints
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":    "healthy",
+		healthy, checks := monitoringService.HealthCheck(context.Background())
+		status := http.StatusOK
+		if !healthy {
+			status = http.StatusServiceUnavailable
+		}
+		
+		c.JSON(status, gin.H{
+			"status":    map[bool]string{true: "healthy", false: "unhealthy"}[healthy],
 			"timestamp": time.Now().UTC(),
 			"version":   cfg.Version,
+			"checks":    checks,
 		})
 	})
 
@@ -114,24 +87,6 @@ func main() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status": "not ready",
 				"error":  "database connection failed",
-			})
-			return
-		}
-
-		// Check Redis connectivity
-		if err := redisClient.Ping(context.Background()).Err(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "not ready",
-				"error":  "redis connection failed",
-			})
-			return
-		}
-
-		// Check Prometheus connectivity
-		if err := promClient.Health(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "not ready",
-				"error":  "prometheus connection failed",
 			})
 			return
 		}
@@ -146,8 +101,7 @@ func main() {
 
 	// Initialize handlers
 	monitoringHandler := handlers.NewMonitoringHandler(monitoringService, logger)
-	healthHandler := handlers.NewHealthHandler(healthService, logger)
-	alertingHandler := handlers.NewAlertingHandler(alertingService, logger)
+	alertHandler := handlers.NewAlertHandler(monitoringService, logger)
 
 	// API routes
 	v1 := router.Group("/api/v1")
@@ -156,57 +110,47 @@ func main() {
 		metrics := v1.Group("/metrics")
 		{
 			metrics.GET("/", monitoringHandler.GetMetrics)
-			metrics.GET("/query", monitoringHandler.QueryMetrics)
-			metrics.GET("/range", monitoringHandler.QueryRangeMetrics)
-			metrics.GET("/services", monitoringHandler.GetServiceMetrics)
-			metrics.GET("/services/:service", monitoringHandler.GetServiceMetrics)
-			metrics.POST("/custom", monitoringHandler.RecordCustomMetric)
+			metrics.GET("/performance", monitoringHandler.GetPerformanceMetrics)
 		}
 
 		// Health monitoring routes
 		health := v1.Group("/health")
 		{
-			health.GET("/", healthHandler.GetOverallHealth)
-			health.GET("/services", healthHandler.GetServicesHealth)
-			health.GET("/services/:service", healthHandler.GetServiceHealth)
-			health.POST("/services/:service/check", healthHandler.CheckServiceHealth)
-			health.GET("/dependencies", healthHandler.GetDependenciesHealth)
+			health.GET("/", monitoringHandler.GetSystemStatus)
+			health.GET("/services", monitoringHandler.GetAllServicesHealth)
+			health.GET("/services/:service", monitoringHandler.GetServiceHealth)
 		}
 
 		// Alerting routes
 		alerts := v1.Group("/alerts")
 		{
-			alerts.GET("/", alertingHandler.GetAlerts)
-			alerts.GET("/:id", alertingHandler.GetAlert)
-			alerts.POST("/", alertingHandler.CreateAlert)
-			alerts.PUT("/:id", alertingHandler.UpdateAlert)
-			alerts.DELETE("/:id", alertingHandler.DeleteAlert)
-			alerts.POST("/:id/acknowledge", alertingHandler.AcknowledgeAlert)
-			alerts.POST("/:id/resolve", alertingHandler.ResolveAlert)
-			alerts.GET("/rules", alertingHandler.GetAlertRules)
-			alerts.POST("/rules", alertingHandler.CreateAlertRule)
-			alerts.PUT("/rules/:id", alertingHandler.UpdateAlertRule)
-			alerts.DELETE("/rules/:id", alertingHandler.DeleteAlertRule)
+			alerts.GET("/", monitoringHandler.GetAlerts)
+			alerts.POST("/", monitoringHandler.CreateAlert)
+			alerts.PUT("/:id", monitoringHandler.UpdateAlert)
+			alerts.DELETE("/:id", monitoringHandler.DeleteAlert)
+			alerts.GET("/:id/history", monitoringHandler.GetAlertHistory)
+			alerts.GET("/active", alertHandler.GetActiveAlerts)
+			alerts.POST("/:id/acknowledge", alertHandler.AcknowledgeAlert)
+			alerts.POST("/:id/resolve", alertHandler.ResolveAlert)
+			alerts.POST("/:id/trigger", alertHandler.TriggerAlert)
 		}
 
 		// Dashboard routes
 		dashboards := v1.Group("/dashboards")
 		{
-			dashboards.GET("/", monitoringHandler.GetDashboards)
-			dashboards.GET("/:id", monitoringHandler.GetDashboard)
-			dashboards.POST("/", monitoringHandler.CreateDashboard)
-			dashboards.PUT("/:id", monitoringHandler.UpdateDashboard)
-			dashboards.DELETE("/:id", monitoringHandler.DeleteDashboard)
+			dashboards.GET("/:type", monitoringHandler.GetDashboard)
 		}
 
 		// System status routes
 		status := v1.Group("/status")
 		{
 			status.GET("/", monitoringHandler.GetSystemStatus)
-			status.GET("/summary", monitoringHandler.GetStatusSummary)
-			status.GET("/incidents", monitoringHandler.GetIncidents)
-			status.POST("/incidents", monitoringHandler.CreateIncident)
-			status.PUT("/incidents/:id", monitoringHandler.UpdateIncident)
+		}
+
+		// Logs routes
+		logs := v1.Group("/logs")
+		{
+			logs.GET("/", monitoringHandler.GetLogs)
 		}
 	}
 
@@ -217,11 +161,8 @@ func main() {
 	// Start metrics collection
 	go monitoringService.StartMetricsCollection(ctx)
 
-	// Start health monitoring
-	go healthService.StartHealthMonitoring(ctx)
-
-	// Start alert processing
-	go alertingService.StartAlertProcessing(ctx)
+	// Start alert evaluation
+	go monitoringService.StartAlertEvaluation(ctx)
 
 	// Create HTTP server
 	server := &http.Server{
