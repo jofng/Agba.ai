@@ -253,10 +253,18 @@ func (h *ConfigHandler) GetConfigHistory(c *gin.Context) {
 		return
 	}
 
+	// Get the configuration to extract service and environment
+	config, err := h.configService.GetConfig(c.Request.Context(), id)
+	if err != nil {
+		h.logger.Error("Failed to get config", zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "Configuration not found"})
+		return
+	}
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	history, total, err := h.configService.GetConfigHistory(c.Request.Context(), id, page, limit)
+	history, total, err := h.configService.GetConfigHistory(c.Request.Context(), config.Service, config.Environment, page, limit)
 	if err != nil {
 		h.logger.Error("Failed to get config history", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve configuration history"})

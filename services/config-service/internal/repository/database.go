@@ -14,6 +14,38 @@ import (
 	"go.uber.org/zap"
 )
 
+// RedisRepository interface for Redis operations
+type RedisRepository interface {
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error
+	Delete(ctx context.Context, key string) error
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+// NATSRepository interface for NATS operations
+type NATSRepository interface {
+	Publish(ctx context.Context, subject string, data []byte) error
+	Subscribe(ctx context.Context, subject string, handler func([]byte)) error
+	Close() error
+}
+
+// DatabaseRepository interface for database operations
+type DatabaseRepository interface {
+	CreateConfiguration(ctx context.Context, config *models.Configuration) error
+	GetConfiguration(ctx context.Context, id uuid.UUID) (*models.Configuration, error)
+	GetConfigurationByService(ctx context.Context, service, environment string, version int) (*models.Configuration, error)
+	UpdateConfiguration(ctx context.Context, id uuid.UUID, config *models.Configuration) error
+	DeleteConfiguration(ctx context.Context, id uuid.UUID) error
+	ListConfigurations(ctx context.Context, service, environment string, limit, offset int) ([]*models.Configuration, int, error)
+	CreateTemplate(ctx context.Context, template *models.ConfigTemplate) error
+	GetTemplate(ctx context.Context, id uuid.UUID) (*models.ConfigTemplate, error)
+	ListTemplates(ctx context.Context, category string, limit, offset int) ([]*models.ConfigTemplate, int, error)
+	UpdateTemplate(ctx context.Context, id uuid.UUID, template *models.ConfigTemplate) error
+	DeleteTemplate(ctx context.Context, id uuid.UUID) error
+	GetConfigHistory(ctx context.Context, service, environment string, limit, offset int) ([]*models.Configuration, int, error)
+	Close() error
+}
+
 // Database represents the database connection
 type Database struct {
 	db     *sql.DB
@@ -94,22 +126,22 @@ func (d *Database) Health() map[string]interface{} {
 	return health
 }
 
-// DatabaseRepository implements configuration repository operations
-type DatabaseRepository struct {
+// DatabaseRepo implements configuration repository operations
+type DatabaseRepo struct {
 	db     *Database
 	logger *zap.Logger
 }
 
-// NewDatabaseRepository creates a new database repository
-func NewDatabaseRepository(db *Database, logger *zap.Logger) *DatabaseRepository {
-	return &DatabaseRepository{
+// NewDatabaseRepo creates a new database repository
+func NewDatabaseRepo(db *Database, logger *zap.Logger) *DatabaseRepo {
+	return &DatabaseRepo{
 		db:     db,
 		logger: logger,
 	}
 }
 
 // CreateConfig creates a new configuration in the database
-func (r *DatabaseRepository) CreateConfig(ctx context.Context, config *models.Configuration) error {
+func (r *DatabaseRepo) CreateConfig(ctx context.Context, config *models.Configuration) error {
 	query := `
 		INSERT INTO configurations (
 			id, service, environment, version, data, schema, tags, metadata,
@@ -156,7 +188,7 @@ func (r *DatabaseRepository) CreateConfig(ctx context.Context, config *models.Co
 }
 
 // GetConfig retrieves a configuration by ID
-func (r *DatabaseRepository) GetConfig(ctx context.Context, id uuid.UUID) (*models.Configuration, error) {
+func (r *DatabaseRepo) GetConfig(ctx context.Context, id uuid.UUID) (*models.Configuration, error) {
 	query := `
 		SELECT id, service, environment, version, data, schema, tags, metadata,
 			   created_by, updated_by, created_at, updated_at
@@ -198,7 +230,7 @@ func (r *DatabaseRepository) GetConfig(ctx context.Context, id uuid.UUID) (*mode
 }
 
 // GetConfigs retrieves configurations with pagination and filtering
-func (r *DatabaseRepository) GetConfigs(ctx context.Context, page, limit int, service, environment string) ([]*models.Configuration, int64, error) {
+func (r *DatabaseRepo) GetConfigs(ctx context.Context, page, limit int, service, environment string) ([]*models.Configuration, int64, error) {
 	offset := (page - 1) * limit
 	
 	// Build query with optional filters
@@ -255,14 +287,10 @@ func (r *DatabaseRepository) GetConfigs(ctx context.Context, page, limit int, se
 			return nil, 0, fmt.Errorf("failed to scan configuration: %w", err)
 		}
 
-		// Unmarshal JSON fields
-		if err := json.Unmarshal(dataJSON, &config.Data); err != nil {
-			r.logger.Warn("Failed to unmarshal config data", zap.Error(err))
-			config.Data = make(map[string]interface{})
-		}
-		if err := json.Unmarshal(schemaJSON, &config.Schema); err != nil {
-			r.logger.Warn("Failed to unmarshal config schema", zap.Error(err))
-			config.Schema = make(map[string]interface{})
+		// Assign JSON fields directly as RawMessage
+		config.Data = dataJSON
+		if len(schemaJSON) > 0 {
+			config.Schema = schemaJSON
 		}
 		if err := json.Unmarshal(tagsJSON, &config.Tags); err != nil {
 			r.logger.Warn("Failed to unmarshal config tags", zap.Error(err))
@@ -284,7 +312,7 @@ func (r *DatabaseRepository) GetConfigs(ctx context.Context, page, limit int, se
 }
 
 // DeleteConfig deletes a configuration by ID
-func (r *DatabaseRepository) DeleteConfig(ctx context.Context, id uuid.UUID) error {
+func (r *DatabaseRepo) DeleteConfig(ctx context.Context, id uuid.UUID) error {
 	query := "DELETE FROM configurations WHERE id = $1"
 	
 	result, err := r.db.DB().ExecContext(ctx, query, id)
@@ -307,7 +335,7 @@ func (r *DatabaseRepository) DeleteConfig(ctx context.Context, id uuid.UUID) err
 }
 
 // GetLatestConfig retrieves the latest configuration for a service and environment
-func (r *DatabaseRepository) GetLatestConfig(ctx context.Context, service, environment string) (*models.Configuration, error) {
+func (r *DatabaseRepo) GetLatestConfig(ctx context.Context, service, environment string) (*models.Configuration, error) {
 	query := `
 		SELECT id, service, environment, version, data, schema, tags, metadata,
 			   created_by, updated_by, created_at, updated_at
@@ -351,7 +379,7 @@ func (r *DatabaseRepository) GetLatestConfig(ctx context.Context, service, envir
 }
 
 // GetConfigHistory retrieves configuration history for a specific config
-func (r *DatabaseRepository) GetConfigHistory(ctx context.Context, configID uuid.UUID, page, limit int) ([]*models.Configuration, int64, error) {
+func (r *DatabaseRepo) GetConfigHistory(ctx context.Context, configID uuid.UUID, page, limit int) ([]*models.Configuration, int64, error) {
 	// First get the service and environment from the config
 	var service, environment string
 	err := r.db.DB().QueryRowContext(ctx, 
@@ -366,7 +394,7 @@ func (r *DatabaseRepository) GetConfigHistory(ctx context.Context, configID uuid
 }
 
 // CreateTemplate creates a new configuration template
-func (r *DatabaseRepository) CreateTemplate(ctx context.Context, template *models.ConfigTemplate) error {
+func (r *DatabaseRepo) CreateTemplate(ctx context.Context, template *models.ConfigTemplate) error {
 	query := `
 		INSERT INTO config_templates (
 			id, name, description, category, schema, defaults, tags, metadata,
@@ -413,7 +441,7 @@ func (r *DatabaseRepository) CreateTemplate(ctx context.Context, template *model
 }
 
 // GetTemplates retrieves templates with pagination and filtering
-func (r *DatabaseRepository) GetTemplates(ctx context.Context, page, limit int, category string) ([]*models.ConfigTemplate, int64, error) {
+func (r *DatabaseRepo) GetTemplates(ctx context.Context, page, limit int, category string) ([]*models.ConfigTemplate, int64, error) {
 	offset := (page - 1) * limit
 	
 	// Build query with optional filters
@@ -466,13 +494,10 @@ func (r *DatabaseRepository) GetTemplates(ctx context.Context, page, limit int, 
 		}
 
 		// Unmarshal JSON fields
-		if err := json.Unmarshal(schemaJSON, &template.Schema); err != nil {
-			r.logger.Warn("Failed to unmarshal template schema", zap.Error(err))
-			template.Schema = make(map[string]interface{})
-		}
-		if err := json.Unmarshal(defaultsJSON, &template.Defaults); err != nil {
-			r.logger.Warn("Failed to unmarshal template defaults", zap.Error(err))
-			template.Defaults = make(map[string]interface{})
+		// Assign JSON fields directly as RawMessage
+		template.Schema = schemaJSON
+		if len(defaultsJSON) > 0 {
+			template.Defaults = defaultsJSON
 		}
 		if err := json.Unmarshal(tagsJSON, &template.Tags); err != nil {
 			r.logger.Warn("Failed to unmarshal template tags", zap.Error(err))
@@ -494,7 +519,7 @@ func (r *DatabaseRepository) GetTemplates(ctx context.Context, page, limit int, 
 }
 
 // GetTemplate retrieves a template by ID
-func (r *DatabaseRepository) GetTemplate(ctx context.Context, id uuid.UUID) (*models.ConfigTemplate, error) {
+func (r *DatabaseRepo) GetTemplate(ctx context.Context, id uuid.UUID) (*models.ConfigTemplate, error) {
 	query := `
 		SELECT id, name, description, category, schema, defaults, tags, metadata,
 			   created_by, updated_by, created_at, updated_at

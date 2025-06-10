@@ -51,10 +51,11 @@ func (n *NATS) Conn() *nats.Conn {
 }
 
 // Close closes the NATS connection
-func (n *NATS) Close() {
+func (n *NATS) Close() error {
 	if n.conn != nil {
 		n.conn.Close()
 	}
+	return nil
 }
 
 // IsConnected returns whether NATS is connected

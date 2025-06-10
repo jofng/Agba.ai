@@ -30,6 +30,8 @@ const (
 // Configuration represents a configuration entity
 type Configuration struct {
 	ID             uuid.UUID       `json:"id" db:"id"`
+	Service        string          `json:"service" db:"service"`
+	Environment    string          `json:"environment" db:"environment"`
 	Type           ConfigType      `json:"type" db:"type"`
 	EntityID       uuid.UUID       `json:"entity_id" db:"entity_id"` // Agent ID, Organization ID, etc.
 	Name           string          `json:"name" db:"name"`
@@ -39,6 +41,7 @@ type Configuration struct {
 	Data           json.RawMessage `json:"data" db:"data"`
 	Schema         json.RawMessage `json:"schema,omitempty" db:"schema"`
 	Tags           []string        `json:"tags" db:"tags"`
+	Metadata       map[string]interface{} `json:"metadata" db:"metadata"`
 	CreatedBy      uuid.UUID       `json:"created_by" db:"created_by"`
 	UpdatedBy      uuid.UUID       `json:"updated_by" db:"updated_by"`
 	CreatedAt      time.Time       `json:"created_at" db:"created_at"`
@@ -70,11 +73,14 @@ type ConfigTemplate struct {
 	ID          uuid.UUID       `json:"id" db:"id"`
 	Name        string          `json:"name" db:"name"`
 	Description string          `json:"description" db:"description"`
+	Category    string          `json:"category" db:"category"`
 	Type        ConfigType      `json:"type" db:"type"`
 	Template    json.RawMessage `json:"template" db:"template"`
 	Schema      json.RawMessage `json:"schema" db:"schema"`
+	Defaults    json.RawMessage `json:"defaults,omitempty" db:"defaults"`
 	Variables   json.RawMessage `json:"variables,omitempty" db:"variables"`
 	Tags        []string        `json:"tags" db:"tags"`
+	Metadata    map[string]interface{} `json:"metadata" db:"metadata"`
 	CreatedBy   uuid.UUID       `json:"created_by" db:"created_by"`
 	UpdatedBy   uuid.UUID       `json:"updated_by" db:"updated_by"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
@@ -336,6 +342,72 @@ type IntegrationsConfig struct {
 	Email      EmailIntegration      `json:"email"`
 	SMS        SMSIntegration        `json:"sms"`
 	Analytics  AnalyticsIntegration  `json:"analytics"`
+}
+
+// Request/Response models for API operations
+
+// CreateConfigRequest represents a request to create a configuration
+type CreateConfigRequest struct {
+	Service     string          `json:"service" validate:"required"`
+	Environment string          `json:"environment" validate:"required"`
+	Type        ConfigType      `json:"type" validate:"required"`
+	EntityID    uuid.UUID       `json:"entity_id" validate:"required"`
+	Name        string          `json:"name" validate:"required"`
+	Description string          `json:"description"`
+	Data        json.RawMessage `json:"data" validate:"required"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Tags        []string        `json:"tags"`
+	Metadata    map[string]interface{} `json:"metadata"`
+}
+
+// UpdateConfigRequest represents a request to update a configuration
+type UpdateConfigRequest struct {
+	Name        *string         `json:"name,omitempty"`
+	Description *string         `json:"description,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	Status      *ConfigStatus   `json:"status,omitempty"`
+}
+
+// ValidateConfigRequest represents a request to validate a configuration
+type ValidateConfigRequest struct {
+	Data   json.RawMessage `json:"data" validate:"required"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	Type   ConfigType      `json:"type" validate:"required"`
+}
+
+// ValidationResult represents the result of configuration validation
+type ValidationResult struct {
+	Valid   bool     `json:"valid"`
+	Errors  []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// CreateTemplateRequest represents a request to create a configuration template
+type CreateTemplateRequest struct {
+	Name        string          `json:"name" validate:"required"`
+	Description string          `json:"description"`
+	Category    string          `json:"category"`
+	Type        ConfigType      `json:"type" validate:"required"`
+	Schema      json.RawMessage `json:"schema" validate:"required"`
+	Defaults    json.RawMessage `json:"defaults,omitempty"`
+	Variables   json.RawMessage `json:"variables,omitempty"`
+	Tags        []string        `json:"tags"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	IsPublic    bool            `json:"is_public"`
+}
+
+// ApplyTemplateRequest represents a request to apply a template
+type ApplyTemplateRequest struct {
+	TemplateID  uuid.UUID       `json:"template_id" validate:"required"`
+	Service     string          `json:"service" validate:"required"`
+	Environment string          `json:"environment" validate:"required"`
+	EntityID    uuid.UUID       `json:"entity_id" validate:"required"`
+	Variables   json.RawMessage `json:"variables,omitempty"`
+	Name        string          `json:"name" validate:"required"`
+	Description string          `json:"description"`
 }
 
 // CRMIntegration represents CRM integration configuration

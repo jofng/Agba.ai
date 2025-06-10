@@ -55,12 +55,11 @@ func main() {
 	defer natsConn.Close()
 
 	// Initialize repositories
-	configRepo := repository.NewConfigRepository(db, redisClient, logger)
-	auditRepo := repository.NewAuditRepository(db, logger)
+	dbRepo := repository.NewDatabaseRepo(db, logger)
+	redisRepo := repository.NewRedisRepo(redisClient, logger)
 
 	// Initialize services
-	configService := service.NewConfigService(configRepo, auditRepo, natsConn, logger)
-	validationService := service.NewValidationService(logger)
+	configService := service.NewConfigService(dbRepo, redisRepo, natsConn, logger)
 
 	// Set Gin mode
 	if cfg.Environment == "production" {
@@ -111,63 +110,28 @@ func main() {
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Initialize handlers
-	configHandler := handlers.NewConfigHandler(configService, validationService, logger)
+	configHandler := handlers.NewConfigHandler(configService, logger)
 
 	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Agent configuration routes
-		agents := v1.Group("/agents")
+		// Configuration routes
+		configs := v1.Group("/configs")
 		{
-			agents.GET("/:id/config", configHandler.GetAgentConfig)
-			agents.PUT("/:id/config", configHandler.UpdateAgentConfig)
-			agents.GET("/:id/config/versions", configHandler.GetAgentConfigVersions)
-			agents.GET("/:id/config/versions/:version", configHandler.GetAgentConfigVersion)
-			agents.POST("/:id/config/rollback/:version", configHandler.RollbackAgentConfig)
-			agents.POST("/:id/config/validate", configHandler.ValidateAgentConfig)
+			configs.POST("", configHandler.CreateConfig)
+			configs.GET("/:id", configHandler.GetConfig)
+			configs.GET("", configHandler.GetConfigs)
+			configs.PUT("/:id", configHandler.UpdateConfig)
+			configs.DELETE("/:id", configHandler.DeleteConfig)
+			configs.GET("/:id/history", configHandler.GetConfigHistory)
+			configs.POST("/:id/validate", configHandler.ValidateConfig)
 		}
 
-		// System configuration routes
-		system := v1.Group("/system")
+		// Configuration values routes
+		values := v1.Group("/values")
 		{
-			system.GET("/config", configHandler.GetSystemConfig)
-			system.PUT("/config", configHandler.UpdateSystemConfig)
-			system.GET("/config/versions", configHandler.GetSystemConfigVersions)
-			system.GET("/config/versions/:version", configHandler.GetSystemConfigVersion)
-			system.POST("/config/rollback/:version", configHandler.RollbackSystemConfig)
-		}
-
-		// Organization configuration routes
-		orgs := v1.Group("/organizations")
-		{
-			orgs.GET("/:id/config", configHandler.GetOrganizationConfig)
-			orgs.PUT("/:id/config", configHandler.UpdateOrganizationConfig)
-			orgs.GET("/:id/config/versions", configHandler.GetOrganizationConfigVersions)
-		}
-
-		// Configuration templates
-		templates := v1.Group("/templates")
-		{
-			templates.GET("/", configHandler.ListConfigTemplates)
-			templates.GET("/:id", configHandler.GetConfigTemplate)
-			templates.POST("/", configHandler.CreateConfigTemplate)
-			templates.PUT("/:id", configHandler.UpdateConfigTemplate)
-			templates.DELETE("/:id", configHandler.DeleteConfigTemplate)
-		}
-
-		// Configuration schemas
-		schemas := v1.Group("/schemas")
-		{
-			schemas.GET("/", configHandler.ListConfigSchemas)
-			schemas.GET("/:type", configHandler.GetConfigSchema)
-			schemas.PUT("/:type", configHandler.UpdateConfigSchema)
-		}
-
-		// Configuration audit
-		audit := v1.Group("/audit")
-		{
-			audit.GET("/", configHandler.GetAuditLogs)
-			audit.GET("/:id", configHandler.GetAuditLog)
+			values.GET("/:service/:environment/:key", configHandler.GetConfigValue)
+			values.PUT("/:service/:environment/:key", configHandler.SetConfigValue)
 		}
 	}
 

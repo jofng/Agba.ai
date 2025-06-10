@@ -13,17 +13,17 @@ import (
 
 // ConfigService handles business logic for configuration management
 type ConfigService struct {
-	dbRepo    *repository.DatabaseRepository
-	redisRepo *repository.RedisRepository
-	natsRepo  *repository.NATSRepository
+	dbRepo    repository.DatabaseRepository
+	redisRepo repository.RedisRepository
+	natsRepo  repository.NATSRepository
 	logger    *zap.Logger
 }
 
 // NewConfigService creates a new configuration service
 func NewConfigService(
-	dbRepo *repository.DatabaseRepository,
-	redisRepo *repository.RedisRepository,
-	natsRepo *repository.NATSRepository,
+	dbRepo repository.DatabaseRepository,
+	redisRepo repository.RedisRepository,
+	natsRepo repository.NATSRepository,
 	logger *zap.Logger,
 ) *ConfigService {
 	return &ConfigService{
@@ -45,7 +45,12 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req *models.CreateConf
 		ID:          uuid.New(),
 		Service:     req.Service,
 		Environment: req.Environment,
-		Version:     req.Version,
+		Type:        req.Type,
+		EntityID:    req.EntityID,
+		Name:        req.Name,
+		Description: req.Description,
+		Version:     1, // Start with version 1
+		Status:      models.ConfigStatusDraft,
 		Data:        req.Data,
 		Schema:      req.Schema,
 		Tags:        req.Tags,
@@ -55,7 +60,7 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req *models.CreateConf
 	}
 
 	// Save to database
-	if err := s.dbRepo.CreateConfig(ctx, config); err != nil {
+	if err := s.dbRepo.CreateConfiguration(ctx, config); err != nil {
 		s.logger.Error("Failed to create config in database", zap.Error(err))
 		return nil, err
 	}
@@ -88,7 +93,7 @@ func (s *ConfigService) GetConfig(ctx context.Context, id uuid.UUID) (*models.Co
 	}
 
 	// Get from database
-	config, err = s.dbRepo.GetConfig(ctx, id)
+	config, err = s.dbRepo.GetConfiguration(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +108,9 @@ func (s *ConfigService) GetConfig(ctx context.Context, id uuid.UUID) (*models.Co
 
 // GetConfigs retrieves configurations with pagination
 func (s *ConfigService) GetConfigs(ctx context.Context, page, limit int, service, environment string) ([]*models.Configuration, int64, error) {
-	return s.dbRepo.GetConfigs(ctx, page, limit, service, environment)
+	offset := (page - 1) * limit
+	configs, total, err := s.dbRepo.ListConfigurations(ctx, service, environment, limit, offset)
+	return configs, int64(total), err
 }
 
 // UpdateConfig updates an existing configuration
@@ -134,7 +141,7 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, id uuid.UUID, req *mod
 	}
 
 	// Save to database
-	if err := s.dbRepo.CreateConfig(ctx, newConfig); err != nil {
+	if err := s.dbRepo.CreateConfiguration(ctx, newConfig); err != nil {
 		s.logger.Error("Failed to create new config version", zap.Error(err))
 		return nil, err
 	}
@@ -168,7 +175,7 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, id uuid.UUID, userID s
 	}
 
 	// Delete from database
-	if err := s.dbRepo.DeleteConfig(ctx, id); err != nil {
+	if err := s.dbRepo.DeleteConfiguration(ctx, id); err != nil {
 		s.logger.Error("Failed to delete config from database", zap.Error(err))
 		return err
 	}
@@ -196,26 +203,32 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, id uuid.UUID, userID s
 func (s *ConfigService) GetConfigValue(ctx context.Context, service, environment, key string) (interface{}, error) {
 	// Try to get from cache first
 	cacheKey := fmt.Sprintf("config:%s:%s:%s", service, environment, key)
-	value, err := s.redisRepo.Get(ctx, cacheKey)
+	cachedValue, err := s.redisRepo.Get(ctx, cacheKey)
 	if err == nil {
 		var result interface{}
-		if err := json.Unmarshal([]byte(value), &result); err == nil {
+		if err := json.Unmarshal([]byte(cachedValue), &result); err == nil {
 			return result, nil
 		}
 	}
 
-	// Get from database
-	config, err := s.dbRepo.GetLatestConfig(ctx, service, environment)
+	// Get from database (0 means latest version)
+	config, err := s.dbRepo.GetConfigurationByService(ctx, service, environment, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	// Extract the specific value
-	if config.Data == nil {
+	if len(config.Data) == 0 {
 		return nil, fmt.Errorf("configuration data is empty")
 	}
 
-	value, exists := config.Data[key]
+	// Parse the JSON data
+	var dataMap map[string]interface{}
+	if err := json.Unmarshal(config.Data, &dataMap); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration data: %w", err)
+	}
+
+	value, exists := dataMap[key]
 	if !exists {
 		return nil, fmt.Errorf("configuration key not found: %s", key)
 	}
@@ -231,25 +244,41 @@ func (s *ConfigService) GetConfigValue(ctx context.Context, service, environment
 
 // SetConfigValue sets a specific configuration value
 func (s *ConfigService) SetConfigValue(ctx context.Context, service, environment, key string, value interface{}, userID string) error {
-	// Get latest configuration
-	config, err := s.dbRepo.GetLatestConfig(ctx, service, environment)
+	// Get latest configuration (0 means latest version)
+	config, err := s.dbRepo.GetConfigurationByService(ctx, service, environment, 0)
 	if err != nil {
 		return err
 	}
 
 	// Update the specific value
-	if config.Data == nil {
-		config.Data = make(map[string]interface{})
+	var dataMap map[string]interface{}
+	if len(config.Data) == 0 {
+		dataMap = make(map[string]interface{})
+	} else {
+		if err := json.Unmarshal(config.Data, &dataMap); err != nil {
+			return fmt.Errorf("failed to parse configuration data: %w", err)
+		}
 	}
-	config.Data[key] = value
+	dataMap[key] = value
+	
+	// Marshal back to JSON
+	updatedData, err := json.Marshal(dataMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated data: %w", err)
+	}
 
 	// Create new version
 	newConfig := &models.Configuration{
 		ID:          uuid.New(),
 		Service:     config.Service,
 		Environment: config.Environment,
+		Type:        config.Type,
+		EntityID:    config.EntityID,
+		Name:        config.Name,
+		Description: config.Description,
 		Version:     config.Version + 1,
-		Data:        config.Data,
+		Status:      config.Status,
+		Data:        updatedData,
 		Schema:      config.Schema,
 		Tags:        config.Tags,
 		Metadata:    config.Metadata,
@@ -258,7 +287,7 @@ func (s *ConfigService) SetConfigValue(ctx context.Context, service, environment
 	}
 
 	// Save to database
-	if err := s.dbRepo.CreateConfig(ctx, newConfig); err != nil {
+	if err := s.dbRepo.CreateConfiguration(ctx, newConfig); err != nil {
 		s.logger.Error("Failed to create new config version", zap.Error(err))
 		return err
 	}
@@ -302,8 +331,10 @@ func (s *ConfigService) ValidateConfig(ctx context.Context, req *models.Validate
 }
 
 // GetConfigHistory retrieves configuration history
-func (s *ConfigService) GetConfigHistory(ctx context.Context, configID uuid.UUID, page, limit int) ([]*models.Configuration, int64, error) {
-	return s.dbRepo.GetConfigHistory(ctx, configID, page, limit)
+func (s *ConfigService) GetConfigHistory(ctx context.Context, service, environment string, page, limit int) ([]*models.Configuration, int64, error) {
+	offset := (page - 1) * limit
+	configs, total, err := s.dbRepo.GetConfigHistory(ctx, service, environment, limit, offset)
+	return configs, int64(total), err
 }
 
 // CreateTemplate creates a new configuration template
@@ -336,7 +367,9 @@ func (s *ConfigService) CreateTemplate(ctx context.Context, req *models.CreateTe
 
 // GetTemplates retrieves configuration templates
 func (s *ConfigService) GetTemplates(ctx context.Context, page, limit int, category string) ([]*models.ConfigTemplate, int64, error) {
-	return s.dbRepo.GetTemplates(ctx, page, limit, category)
+	offset := (page - 1) * limit
+	templates, total, err := s.dbRepo.ListTemplates(ctx, category, limit, offset)
+	return templates, int64(total), err
 }
 
 // ApplyTemplate applies a template to create a configuration
@@ -347,13 +380,33 @@ func (s *ConfigService) ApplyTemplate(ctx context.Context, templateID uuid.UUID,
 		return nil, err
 	}
 
-	// Merge template defaults with provided values
+	// Merge template defaults with provided variables
 	data := make(map[string]interface{})
-	for k, v := range template.Defaults {
-		data[k] = v
+	
+	// Parse template defaults
+	if len(template.Defaults) > 0 {
+		var defaults map[string]interface{}
+		if err := json.Unmarshal(template.Defaults, &defaults); err == nil {
+			for k, v := range defaults {
+				data[k] = v
+			}
+		}
 	}
-	for k, v := range req.Values {
-		data[k] = v
+	
+	// Parse and merge provided variables
+	if len(req.Variables) > 0 {
+		var variables map[string]interface{}
+		if err := json.Unmarshal(req.Variables, &variables); err == nil {
+			for k, v := range variables {
+				data[k] = v
+			}
+		}
+	}
+	
+	// Marshal data back to JSON
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal configuration data: %w", err)
 	}
 
 	// Create configuration from template
@@ -361,17 +414,22 @@ func (s *ConfigService) ApplyTemplate(ctx context.Context, templateID uuid.UUID,
 		ID:          uuid.New(),
 		Service:     req.Service,
 		Environment: req.Environment,
+		Type:        template.Type,
+		EntityID:    req.EntityID,
+		Name:        req.Name,
+		Description: req.Description,
 		Version:     1,
-		Data:        data,
+		Status:      models.ConfigStatusDraft,
+		Data:        dataBytes,
 		Schema:      template.Schema,
-		Tags:        req.Tags,
-		Metadata:    req.Metadata,
+		Tags:        []string{}, // No tags in ApplyTemplateRequest
+		Metadata:    make(map[string]interface{}), // Empty metadata
 		CreatedBy:   uuid.MustParse(userID),
 		UpdatedBy:   uuid.MustParse(userID),
 	}
 
 	// Save to database
-	if err := s.dbRepo.CreateConfig(ctx, config); err != nil {
+	if err := s.dbRepo.CreateConfiguration(ctx, config); err != nil {
 		s.logger.Error("Failed to create config from template", zap.Error(err))
 		return nil, err
 	}
@@ -398,10 +456,17 @@ func (s *ConfigService) ApplyTemplate(ctx context.Context, templateID uuid.UUID,
 
 // Helper methods
 
-func (s *ConfigService) validateConfigData(data map[string]interface{}) error {
-	if data == nil {
-		return fmt.Errorf("configuration data cannot be nil")
+func (s *ConfigService) validateConfigData(data json.RawMessage) error {
+	if len(data) == 0 {
+		return fmt.Errorf("configuration data cannot be empty")
 	}
+	
+	// Validate that it's valid JSON
+	var temp interface{}
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return fmt.Errorf("invalid JSON data: %w", err)
+	}
+	
 	// Add more validation logic as needed
 	return nil
 }

@@ -36,21 +36,21 @@ func main() {
 	}
 
 	// Initialize database connection
-	db, err := repository.NewDatabase(cfg.Database, logger)
+	db, err := repository.NewDatabase(&cfg.Database, logger)
 	if err != nil {
 		logger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 	defer db.Close()
 
 	// Initialize Redis connection
-	redisClient, err := repository.NewRedis(cfg.Redis, logger)
+	redisClient, err := repository.NewRedis(&cfg.Redis, logger)
 	if err != nil {
 		logger.Fatal("Failed to connect to Redis", zap.Error(err))
 	}
 	defer redisClient.Close()
 
 	// Initialize NATS connection
-	natsConn, err := repository.NewNATS(cfg.NATS, logger)
+	natsConn, err := repository.NewNATS(&cfg.NATS, logger)
 	if err != nil {
 		logger.Fatal("Failed to connect to NATS", zap.Error(err))
 	}
@@ -64,7 +64,19 @@ func main() {
 	auditRepo := repository.NewAuditRepository(db, logger)
 
 	// Initialize authentication manager
-	authManager := auth.NewManager(cfg.Auth, logger)
+	authConfig := &auth.Config{
+		JWTSecret:              cfg.Auth.JWTSecret,
+		JWTExpiration:          cfg.Auth.AccessTokenTTL,
+		RefreshExpiration:      cfg.Auth.RefreshTokenTTL,
+		PasswordMinLength:      cfg.Auth.PasswordMinLength,
+		PasswordRequireUpper:   cfg.Auth.PasswordRequireUpper,
+		PasswordRequireLower:   cfg.Auth.PasswordRequireLower,
+		PasswordRequireDigit:   cfg.Auth.PasswordRequireDigit,
+		PasswordRequireSpecial: cfg.Auth.PasswordRequireSpecial,
+		MaxLoginAttempts:       cfg.Auth.MaxLoginAttempts,
+		LockoutDuration:        cfg.Auth.LockoutDuration,
+	}
+	authManager := auth.NewManager(authConfig, logger)
 
 	// Initialize services
 	userService := service.NewUserService(userRepo, organizationRepo, roleRepo, authManager, natsConn, logger)
