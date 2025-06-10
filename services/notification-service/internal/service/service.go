@@ -4,7 +4,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/agba-ai/notification-service/internal/repository"
+    "notification-service/internal/repository"
     "github.com/google/uuid"
     "go.uber.org/zap"
 )

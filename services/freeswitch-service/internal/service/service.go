@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agba-ai/freeswitch-service/internal/config"
-	"github.com/agba-ai/freeswitch-service/internal/freeswitch"
-	"github.com/agba-ai/freeswitch-service/internal/integration"
-	"github.com/agba-ai/freeswitch-service/internal/models"
+	"freeswitch-service/internal/config"
+	"freeswitch-service/internal/freeswitch"
+	"freeswitch-service/internal/integration"
+	"freeswitch-service/internal/models"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )

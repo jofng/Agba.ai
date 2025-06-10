@@ -1,7 +1,7 @@
 package routes
 
 import (
-	"github.com/agba-ai/config-service/internal/handlers"
+	"config-service/internal/handlers"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"

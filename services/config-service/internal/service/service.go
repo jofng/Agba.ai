@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/agba-ai/config-service/internal/models"
-	"github.com/agba-ai/config-service/internal/repository"
+	"config-service/internal/models"
+	"config-service/internal/repository"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )

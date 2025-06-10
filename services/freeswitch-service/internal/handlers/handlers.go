@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/agba-ai/freeswitch-service/internal/models"
-	"github.com/agba-ai/freeswitch-service/internal/service"
+	"freeswitch-service/internal/models"
+	"freeswitch-service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

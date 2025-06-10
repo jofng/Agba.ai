@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agba-ai/freeswitch-service/internal/config"
-	"github.com/agba-ai/freeswitch-service/internal/models"
+	"freeswitch-service/internal/config"
+	"freeswitch-service/internal/models"
 	"go.uber.org/zap"
 )
 

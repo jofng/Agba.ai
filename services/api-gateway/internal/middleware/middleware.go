@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agba-ai/api-gateway/internal/auth"
-	"github.com/agba-ai/api-gateway/internal/config"
-	"github.com/agba-ai/api-gateway/internal/gateway"
+	"api-gateway/internal/auth"
+	"api-gateway/internal/config"
+	"api-gateway/internal/gateway"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -139,7 +139,7 @@ func Metrics() gin.HandlerFunc {
 }
 
 // Authentication middleware for JWT and API key validation
-func Authentication(authService *auth.Service) gin.HandlerFunc {
+func Authentication(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -171,7 +171,21 @@ func Authentication(authService *auth.Service) gin.HandlerFunc {
 		}
 
 		// Validate token
-		claims, err := authService.ValidateToken(c.Request.Context(), token, authType)
+		var claims *auth.Claims
+		var err error
+		
+		if authType == "jwt" {
+			claims, err = authService.ValidateToken(token)
+		} else if authType == "api_key" {
+			_, err = authService.ValidateAPIKey(token)
+			// For API keys, create minimal claims
+			if err == nil {
+				claims = &auth.Claims{
+					UserID: "api-key-user",
+					Permissions: []string{"*"},
+				}
+			}
+		}
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "Invalid or expired token",
@@ -193,7 +207,7 @@ func Authentication(authService *auth.Service) gin.HandlerFunc {
 }
 
 // WebRTCAuth middleware for WebRTC-specific authentication
-func WebRTCAuth(authService *auth.Service) gin.HandlerFunc {
+func WebRTCAuth(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// WebRTC may use different auth mechanisms
 		// For now, use the same as regular auth but with different scopes
@@ -227,7 +241,7 @@ func WebRTCAuth(authService *auth.Service) gin.HandlerFunc {
 }
 
 // AdminAuth middleware for admin-only endpoints
-func AdminAuth(authService *auth.Service) gin.HandlerFunc {
+func AdminAuth(authService auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// First run regular authentication
 		Authentication(authService)(c)

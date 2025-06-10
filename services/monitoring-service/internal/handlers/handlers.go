@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/agba-ai/monitoring-service/internal/models"
-	"github.com/agba-ai/monitoring-service/internal/service"
+	"monitoring-service/internal/models"
+	"monitoring-service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

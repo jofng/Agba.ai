@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agba-ai/api-gateway/internal/config"
+	"api-gateway/internal/config"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )

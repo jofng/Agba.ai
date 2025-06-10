@@ -1,9 +1,7 @@
 package proxy
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -13,6 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// Service interface for proxy operations
+type Service interface {
+	RegisterService(name, baseURL string, timeout time.Duration) error
+	ProxyRequest(c *gin.Context, serviceName string)
+	HealthCheck(serviceName string) error
+	GetServiceStatus() map[string]interface{}
+}
+
+// Config holds proxy configuration
+type Config struct {
+	Services map[string]ServiceConfig `json:"services"`
+}
 
 // ServiceProxy handles proxying requests to backend services
 type ServiceProxy struct {
@@ -27,6 +38,21 @@ type ServiceConfig struct {
 	Timeout  time.Duration
 	HealthPath string
 	Proxy    *httputil.ReverseProxy
+}
+
+// New creates a new proxy service
+func New(config *Config, logger *zap.Logger) Service {
+	sp := &ServiceProxy{
+		logger:   logger,
+		services: make(map[string]*ServiceConfig),
+	}
+	
+	// Register services from config
+	for name, serviceConfig := range config.Services {
+		sp.RegisterService(name, serviceConfig.BaseURL, serviceConfig.Timeout)
+	}
+	
+	return sp
 }
 
 // NewServiceProxy creates a new service proxy
@@ -92,36 +118,41 @@ func (sp *ServiceProxy) RegisterService(name, baseURL string, timeout time.Durat
 }
 
 // ProxyRequest proxies a request to the specified service
-func (sp *ServiceProxy) ProxyRequest(serviceName string) gin.HandlerFunc {
+func (sp *ServiceProxy) ProxyRequest(c *gin.Context, serviceName string) {
+	service, exists := sp.services[serviceName]
+	if !exists {
+		sp.logger.Error("Service not found", zap.String("service", serviceName))
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
+		return
+	}
+
+	// Log the request
+	sp.logger.Info("Proxying request",
+		zap.String("service", serviceName),
+		zap.String("method", c.Request.Method),
+		zap.String("path", c.Request.URL.Path),
+		zap.String("client_ip", c.ClientIP()),
+	)
+
+	// Set timeout
+	c.Request = c.Request.WithContext(c.Request.Context())
+	
+	// Proxy the request
+	service.Proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+// ProxyRequestHandler returns a gin handler for proxying requests
+func (sp *ServiceProxy) ProxyRequestHandler(serviceName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		service, exists := sp.services[serviceName]
-		if !exists {
-			sp.logger.Error("Service not found", zap.String("service", serviceName))
-			c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
-			return
-		}
-
-		// Log the request
-		sp.logger.Info("Proxying request",
-			zap.String("service", serviceName),
-			zap.String("method", c.Request.Method),
-			zap.String("path", c.Request.URL.Path),
-			zap.String("client_ip", c.ClientIP()),
-		)
-
-		// Set timeout
-		c.Request = c.Request.WithContext(c.Request.Context())
-		
-		// Proxy the request
-		service.Proxy.ServeHTTP(c.Writer, c.Request)
+		sp.ProxyRequest(c, serviceName)
 	}
 }
 
 // HealthCheck checks the health of a service
-func (sp *ServiceProxy) HealthCheck(serviceName string) (bool, error) {
+func (sp *ServiceProxy) HealthCheck(serviceName string) error {
 	service, exists := sp.services[serviceName]
 	if !exists {
-		return false, fmt.Errorf("service %s not found", serviceName)
+		return fmt.Errorf("service %s not found", serviceName)
 	}
 
 	client := &http.Client{
@@ -136,11 +167,15 @@ func (sp *ServiceProxy) HealthCheck(serviceName string) (bool, error) {
 			zap.String("url", healthURL),
 			zap.Error(err),
 		)
-		return false, err
+		return err
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == http.StatusOK, nil
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("service %s health check failed with status %d", serviceName, resp.StatusCode)
+	}
+
+	return nil
 }
 
 // GetServiceStatus returns the status of all registered services
@@ -148,7 +183,8 @@ func (sp *ServiceProxy) GetServiceStatus() map[string]interface{} {
 	status := make(map[string]interface{})
 	
 	for name, service := range sp.services {
-		healthy, err := sp.HealthCheck(name)
+		err := sp.HealthCheck(name)
+		healthy := err == nil
 		serviceStatus := map[string]interface{}{
 			"name":    name,
 			"baseURL": service.BaseURL,

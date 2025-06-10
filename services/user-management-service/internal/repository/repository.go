@@ -6,7 +6,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/agba-ai/user-management-service/internal/models"
+    "user-management-service/internal/models"
     "github.com/google/uuid"
     "go.uber.org/zap"
     "golang.org/x/crypto/bcrypt"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agba-ai/config-service/internal/config"
+	"config-service/internal/config"
 	"github.com/go-redis/redis/v8"
 	"go.uber.org/zap"
 )

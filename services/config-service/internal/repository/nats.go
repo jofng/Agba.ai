@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agba-ai/config-service/internal/config"
+	"config-service/internal/config"
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )

@@ -7,7 +7,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/agba-ai/monitoring-service/internal/models"
+    "monitoring-service/internal/models"
     "github.com/google/uuid"
     "go.uber.org/zap"
 )

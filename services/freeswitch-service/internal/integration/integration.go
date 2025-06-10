@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agba-ai/freeswitch-service/internal/config"
-	"github.com/agba-ai/freeswitch-service/internal/models"
+	"freeswitch-service/internal/config"
+	"freeswitch-service/internal/models"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )

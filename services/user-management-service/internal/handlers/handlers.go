@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/agba-ai/user-management-service/internal/models"
-	"github.com/agba-ai/user-management-service/internal/service"
+	"user-management-service/internal/models"
+	"user-management-service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agba-ai/config-service/internal/config"
-	"github.com/agba-ai/config-service/internal/models"
+	"config-service/internal/config"
+	"config-service/internal/models"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
